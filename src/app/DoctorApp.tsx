@@ -45,7 +45,6 @@ export default function DoctorApp({
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   addRxNotification: (n: Omit<RxNotification, "id" | "read">) => void;
-  onSessionAuthenticated?: () => Promise<void>;
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentDoctor, setCurrentDoctor] = useState<DoctorData | null>(null);
@@ -59,7 +58,6 @@ export default function DoctorApp({
   const [staffError, setStaffError] = useState<string | null>(null);
 
   const handleAuthenticate = async (doctorData: DoctorData) => {
-    await onSessionAuthenticated?.();
     setStaffLoading(true); setStaffError(null);
     try {
       const data = await loadStaffData();
