@@ -9,8 +9,6 @@ import { DoctorAnalytics } from "./components/doctor/DoctorAnalytics";
 import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
 import { DoctorViralStatus } from "./components/doctor/DoctorViralStatus";
 import { DoctorTreatmentProgress } from "./components/doctor/DoctorTreatmentProgress";
-import type { Appointment } from "./components/AppointmentCard";
-import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
 import { logoutStaff } from "./lib/appointmentApi";
 import { loadStaffData, type StaffAnalytics } from "./lib/staffApi";
 import {
@@ -37,31 +35,17 @@ type DoctorView =
   | "analytics"
   | "prescription"
   | "viral-status"
-  | "treatment-progress"
-  | "appointments";
+  | "treatment-progress";
 
 export default function DoctorApp({
   prescriptions,
   setPrescriptions,
   addRxNotification,
-  appointments = [],
-  appointmentsLoading = false,
-  appointmentsError = null,
-  onReloadAppointments = () => undefined,
-  onAppointmentUpdated = () => undefined,
-  onAppointmentCreated = () => undefined,
-  onSessionAuthenticated,
 }: {
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   addRxNotification: (n: Omit<RxNotification, "id" | "read">) => void;
-  appointments?: Appointment[];
-  appointmentsLoading?: boolean;
-  appointmentsError?: string | null;
-  onReloadAppointments?: () => void;
-  onAppointmentUpdated?: (appointment: Appointment) => void;
-  onAppointmentCreated?: (appointment: Appointment) => void;
-  onSessionAuthenticated: () => Promise<void>;
+  onSessionAuthenticated?: () => Promise<void>;
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentDoctor, setCurrentDoctor] = useState<DoctorData | null>(null);
@@ -75,7 +59,7 @@ export default function DoctorApp({
   const [staffError, setStaffError] = useState<string | null>(null);
 
   const handleAuthenticate = async (doctorData: DoctorData) => {
-    await onSessionAuthenticated();
+    await onSessionAuthenticated?.();
     setStaffLoading(true); setStaffError(null);
     try {
       const data = await loadStaffData();
@@ -108,7 +92,6 @@ export default function DoctorApp({
   const navItems = [
     { label: "Home",          view: "home",               icon: Home,         show: true },
     { label: "Schedule",      view: "schedule",            icon: Calendar,     show: true },
-    { label: "Bookings",      view: "appointments",        icon: Calendar,     show: true },
     { label: "Patients",      view: "patients",            icon: Users,        show: true },
     { label: "Notes",         view: "notes",               icon: FileText,     show: true },
     { label: "Analytics",     view: "analytics",           icon: TrendingUp,   show: true },
@@ -247,24 +230,6 @@ export default function DoctorApp({
 
         {view === "schedule" && (
           <DoctorSchedule onNavigate={handleNavigate} sessions={sessions} />
-        )}
-
-        {view === "appointments" && (
-          <div className="space-y-5">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800">Patient Bookings</h2>
-              <p className="mt-1 text-sm text-slate-500">Review and update the same saved appointments patients and administrators see.</p>
-            </div>
-            <PersistedAppointmentsPanel
-              appointments={appointments}
-              role="doctor"
-              loading={appointmentsLoading}
-              loadError={appointmentsError}
-              onReload={onReloadAppointments}
-              onUpdated={onAppointmentUpdated}
-              onCreated={onAppointmentCreated}
-            />
-          </div>
         )}
 
         {view === "patients" && (

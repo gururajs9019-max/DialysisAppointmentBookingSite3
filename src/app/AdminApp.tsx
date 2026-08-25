@@ -1,8 +1,6 @@
 import React, { useState, useMemo, useRef } from "react";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
-import type { Appointment } from "./components/AppointmentCard";
-import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
 import { logoutStaff } from "./lib/appointmentApi";
 import { persistQuickAssignment } from "./lib/quickAssignment.mjs";
 import { createMachine, createPatient, createSession, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
@@ -23,7 +21,7 @@ import {
 type NavSection =
   | "dashboard" | "live-schedule" | "patient-history" | "machines"
   | "viral-status" | "register-patient" | "notifications" | "assign-patient"
-  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics" | "appointments";
+  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics";
 
 type DoctorStatus = "Active" | "Inactive";
 
@@ -5052,25 +5050,11 @@ export default function AdminApp({
   setPrescriptions,
   rxNotifications,
   markRxRead,
-  appointments = [],
-  appointmentsLoading = false,
-  appointmentsError = null,
-  onReloadAppointments = () => undefined,
-  onAppointmentUpdated = () => undefined,
-  onAppointmentCreated = () => undefined,
-  onSessionAuthenticated,
 }: {
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   rxNotifications: RxNotification[];
   markRxRead: (id: string) => void;
-  appointments?: Appointment[];
-  appointmentsLoading?: boolean;
-  appointmentsError?: string | null;
-  onReloadAppointments?: () => void;
-  onAppointmentUpdated?: (appointment: Appointment) => void;
-  onAppointmentCreated?: (appointment: Appointment) => void;
-  onSessionAuthenticated: () => Promise<void>;
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminData | null>(null);
@@ -5109,7 +5093,6 @@ export default function AdminApp({
     return (
       <AdminAuthPortal
         onAuthenticate={async data => {
-          await onSessionAuthenticated();
           setStaffLoading(true); setStaffError(null);
           try {
             const records = await loadStaffData();
@@ -5139,7 +5122,6 @@ export default function AdminApp({
 
   const sidebarLinks: { section: NavSection; label: string; icon: React.ReactNode; highlight?: boolean; group: string }[] = [
     { section: "dashboard",        label: "Dashboard",         icon: <LayoutDashboard className="w-4 h-4" />, group: "main" },
-    { section: "appointments",     label: "Bookings",          icon: <Calendar className="w-4 h-4" />,        group: "main" },
     { section: "assign-patient",   label: "Assign Patient",    icon: <CalendarPlus className="w-4 h-4" />,    group: "main", highlight: true },
     { section: "live-schedule",    label: "Live Schedule",     icon: <Activity className="w-4 h-4" />,        group: "scheduling" },
     { section: "missed-slots",     label: "Missed Slots",      icon: <SkipForward className="w-4 h-4" />,     group: "scheduling" },
@@ -5158,21 +5140,6 @@ export default function AdminApp({
     switch (activeSection) {
       case "dashboard":
         return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate} />;
-      case "appointments":
-        return (
-          <div className="space-y-5 animate-fade-in">
-            <SectionHeader title="Patient Bookings" subtitle="Review and update appointments saved by patients across all portals." />
-            <PersistedAppointmentsPanel
-              appointments={appointments}
-              role="admin"
-              loading={appointmentsLoading}
-              loadError={appointmentsError}
-              onReload={onReloadAppointments}
-              onUpdated={onAppointmentUpdated}
-              onCreated={onAppointmentCreated}
-            />
-          </div>
-        );
       case "assign-patient":
         return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions} onAssigned={handleAssigned} prefillMachine={prefillMachine} />;
       case "live-schedule":
