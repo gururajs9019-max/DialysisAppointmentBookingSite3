@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import type { AdminPrescription, RxNotification } from "./AdminApp";
+import type { AdminPrescription, RxNotification, Patient, Machine, DialysisSession } from "./AdminApp";
 import { DoctorAuthPortal, DoctorData } from "./components/doctor/DoctorAuthPortal";
 import { DoctorHomePage } from "./components/doctor/DoctorHomePage";
 import { DoctorSchedule } from "./components/doctor/DoctorSchedule";
@@ -12,6 +12,7 @@ import { DoctorTreatmentProgress } from "./components/doctor/DoctorTreatmentProg
 import type { Appointment } from "./components/AppointmentCard";
 import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
 import { logoutStaff } from "./lib/appointmentApi";
+import { loadStaffData, type StaffAnalytics } from "./lib/staffApi";
 import {
   Stethoscope,
   Calendar,
@@ -66,9 +67,23 @@ export default function DoctorApp({
   const [currentDoctor, setCurrentDoctor] = useState<DoctorData | null>(null);
   const [view, setView] = useState<DoctorView>("home");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [sessions, setSessions] = useState<DialysisSession[]>([]);
+  const [analytics, setAnalytics] = useState<StaffAnalytics | null>(null);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffError, setStaffError] = useState<string | null>(null);
 
   const handleAuthenticate = async (doctorData: DoctorData) => {
     await onSessionAuthenticated();
+    setStaffLoading(true); setStaffError(null);
+    try {
+      const data = await loadStaffData();
+      setPatients(data.patients); setMachines(data.machines); setSessions(data.sessions);
+      setAnalytics(data.analytics); setPrescriptions(data.prescriptions);
+    } catch (error) {
+      setStaffError(error instanceof Error ? error.message : "Staff records could not be loaded.");
+    } finally { setStaffLoading(false); }
     setCurrentDoctor(doctorData);
     setIsAuthenticated(true);
     setView("home");
@@ -224,12 +239,14 @@ export default function DoctorApp({
 
       {/* Main Content */}
       <main className={view === "home" ? "" : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"}>
+        {staffLoading && <p className="mx-4 mt-4 text-sm text-blue-700">Loading saved clinical records…</p>}
+        {staffError && <p className="mx-4 mt-4 text-sm text-red-700">{staffError}</p>}
         {view === "home" && (
           <DoctorHomePage onNavigate={handleNavigate} />
         )}
 
         {view === "schedule" && (
-          <DoctorSchedule onNavigate={handleNavigate} />
+          <DoctorSchedule onNavigate={handleNavigate} sessions={sessions} />
         )}
 
         {view === "appointments" && (
@@ -251,15 +268,15 @@ export default function DoctorApp({
         )}
 
         {view === "patients" && (
-          <PatientProfiles onNavigate={handleNavigate} />
+          <PatientProfiles onNavigate={handleNavigate} patients={patients} sessions={sessions} />
         )}
 
         {view === "notes" && (
-          <ClinicalNotes onNavigate={handleNavigate} />
+          <ClinicalNotes onNavigate={handleNavigate} patients={patients} />
         )}
 
         {view === "analytics" && (
-          <DoctorAnalytics onNavigate={handleNavigate} prescriptions={prescriptions} />
+          <DoctorAnalytics onNavigate={handleNavigate} prescriptions={prescriptions} patients={patients} machines={machines} sessions={sessions} analytics={analytics} />
         )}
 
         {view === "prescription" && (
@@ -273,11 +290,11 @@ export default function DoctorApp({
         )}
 
         {view === "viral-status" && (
-          <DoctorViralStatus onNavigate={handleNavigate} />
+          <DoctorViralStatus onNavigate={handleNavigate} patients={patients} />
         )}
 
         {view === "treatment-progress" && (
-          <DoctorTreatmentProgress onNavigate={handleNavigate} />
+          <DoctorTreatmentProgress onNavigate={handleNavigate} patients={patients} sessions={sessions} />
         )}
       </main>
 

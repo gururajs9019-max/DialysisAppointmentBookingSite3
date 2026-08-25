@@ -4,6 +4,7 @@ import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import type { Appointment } from "./components/AppointmentCard";
 import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
 import { logoutStaff } from "./lib/appointmentApi";
+import { createMachine, createPatient, createSession, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -40,8 +41,8 @@ interface DoctorRecord {
 type MachineStatus = "available" | "in-use" | "scheduled" | "maintenance" | "disabled";
 type ViralStatusValue = "Positive" | "Negative" | "Unknown" | "Awaiting Report";
 type TreatmentStatus = "Active" | "Transplanted" | "Expired" | "Shifted" | "Discontinued";
-type AttendanceStatus = "Completed" | "Missed" | "Cancelled";
-type SessionStatus = "Running" | "Waiting" | "Completed";
+type AttendanceStatus = "Scheduled" | "Completed" | "Missed" | "Cancelled";
+type SessionStatus = "Scheduled" | "Running" | "Waiting" | "Completed" | "Missed" | "Cancelled";
 type AssignStep = 1 | 2 | 3 | 4 | "success";
 
 interface ViralProfile {
@@ -1141,7 +1142,7 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel }: {
 function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine }: {
   patients: Patient[]; machines: Machine[]; units: DialysisUnit[];
   sessions: DialysisSession[];
-  onAssigned: (session: DialysisSession, machineId: string) => void;
+  onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
   prefillMachine?: Machine | null;
 }) {
   const prefillUnit = prefillMachine
@@ -1174,7 +1175,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     4: !!draft.date && !!draft.slotType && slotReady && validation.errors.length === 0,
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     const newSession: DialysisSession = {
       id: `S${Date.now()}`,
       patientId: draft.patient!.id,
@@ -1195,9 +1196,8 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       slotType: draft.slotType as "normal" | "emergency",
       emergencyTime: draft.slotType === "emergency" ? draft.emergencyTime : undefined,
     };
-    onAssigned(newSession, draft.machine!.id);
-    setShowConfirm(false);
-    setStep("success");
+    try { await onAssigned(newSession, draft.machine!.id); setShowConfirm(false); setStep("success"); }
+    catch (error) { window.alert(error instanceof Error ? error.message : "Assignment could not be saved."); }
   };
 
   if (step === "success") {
@@ -1334,7 +1334,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
 
 function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: {
   machine: Machine; patients: Patient[]; sessions: DialysisSession[];
-  onAssigned: (session: DialysisSession, machineId: string) => void;
+  onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
@@ -1363,7 +1363,7 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
 
   const canConfirm = !!selectedPatient && !!date && !!selectedSlot && validation.errors.length === 0;
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     const newSession: DialysisSession = {
       id: `S${Date.now()}`, patientId: selectedPatient!.id,
       patientName: selectedPatient!.name, uhid: selectedPatient!.uhid,
@@ -1372,8 +1372,8 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
       doctor: doctor || "Not assigned", attendance: "Completed", notes,
       startTime: slot?.startFmt ?? "—", endTime: slot?.endFmt ?? "—", status: "Waiting",
     };
-    onAssigned(newSession, machine.id);
-    setConfirmed(true);
+    try { await onAssigned(newSession, machine.id); setConfirmed(true); }
+    catch (error) { window.alert(error instanceof Error ? error.message : "Assignment could not be saved."); }
   };
 
   const inputCls = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white";
@@ -1503,7 +1503,7 @@ function MachineFormModal({ mode, machine, units, categories, onSave, onClose }:
   machine?: Machine;
   units: DialysisUnit[];
   categories: MachineTypeConfig[];
-  onSave: (m: Machine) => void;
+  onSave: (m: Machine) => Promise<void>;
   onClose: () => void;
 }) {
   const [form, setForm] = useState<Machine>(machine ?? {
@@ -1518,6 +1518,7 @@ function MachineFormModal({ mode, machine, units, categories, onSave, onClose }:
   const labelCls = "block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5";
 
   const isValid = form.number.trim().length > 0;
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1572,10 +1573,11 @@ function MachineFormModal({ mode, machine, units, categories, onSave, onClose }:
 
         <div className="flex gap-3 p-6 pt-0 shrink-0">
           <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
-          <button onClick={() => isValid && onSave(form)} disabled={!isValid}
+          <button onClick={async () => { if (!isValid) return; try { setSaveError(null); await onSave(form); } catch (error) { setSaveError(error instanceof Error ? error.message : "Machine could not be saved."); } }} disabled={!isValid}
             className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-40 shadow-lg shadow-violet-100">
             {mode === "add" ? "Add Machine" : "Save Changes"}
           </button>
+          {saveError && <p className="absolute bottom-2 left-6 text-xs text-red-600">{saveError}</p>}
         </div>
       </div>
     </div>
@@ -1624,7 +1626,7 @@ function AddCategoryModal({ onAdd, onClose }: { onAdd: (cat: MachineTypeConfig) 
 function MachineSection({ machines: initialMachines, patients, sessions, units, onAssigned }: {
   machines: Machine[]; patients: Patient[]; sessions: DialysisSession[];
   units: DialysisUnit[];
-  onAssigned: (session: DialysisSession, machineId: string) => void;
+  onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
 }) {
   const [machines, setMachines] = useState(initialMachines);
   const [customCategories, setCustomCategories] = useState<MachineTypeConfig[]>([]);
@@ -1648,10 +1650,25 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
     return true;
   }), [machines, filterUnit, filterCat, filterStatus, filterAvailable]);
 
-  const updateStatus = (id: string, status: MachineStatus) =>
-    setMachines(prev => prev.map(m => m.id === id ? { ...m, status } : m));
+  const updateStatus = async (id: string, status: MachineStatus) => {
+    try {
+      await updateMachine(id, { status });
+      setMachines(prev => prev.map(m => m.id === id ? { ...m, status } : m));
+    } catch {
+      window.alert("Machine status could not be saved. Please try again.");
+    }
+  };
 
-  const handleSaveMachine = (m: Machine) => {
+  const handleSaveMachine = async (m: Machine) => {
+    const existing = machines.some(x => x.id === m.id);
+    if (existing) {
+      try { await updateMachine(m.id, { status: m.status, name: m.name, notes: m.notes }); }
+      catch { throw new Error("Machine changes could not be saved. Please try again."); }
+    } else {
+      if (!m.unit || !m.number.trim() || !m.category || !(m.name || m.number).trim()) throw new Error("Unit, machine number, category, and name are required.");
+      const created = await createMachine({ unitId: m.unit, code: m.number.trim(), name: (m.name || m.number).trim(), category: m.category, status: m.status, notes: m.notes });
+      m = { ...m, id: String(created.machine.id), name: String(created.machine.name || m.name || m.number), number: String(created.machine.code || m.number) };
+    }
     setMachines(prev => {
       const idx = prev.findIndex(x => x.id === m.id);
       if (idx >= 0) {
@@ -2786,6 +2803,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingRxId, setEditingRxId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const counts = (["Active", "Transplanted", "Expired", "Shifted", "Discontinued"] as TreatmentStatus[]).reduce(
     (acc, s) => ({ ...acc, [s]: patients.filter(p => p.treatmentStatus === s).length }), {} as Record<TreatmentStatus, number>
@@ -2807,33 +2825,14 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   };
   const cancelEdit = () => { setEditingRxId(null); setEditDraft(null); };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editDraft) return;
-    const savedAt = new Date().toISOString();
-    setPrescriptions(prev => prev.map(rx => {
-      if (rx.id !== editDraft.id) return rx;
-      const changed = computeChangedFields(rx, editDraft);
-      const entry: PrescriptionHistoryEntry = {
-        version: (rx.history.length > 0 ? rx.history[0].version : 0) + 1,
-        updatedDate: rx.issuedDate, updatedBy: rx.updatedBy,
-        updatedByRole: rx.updatedByRole,
-        updatedAt: rx.lastUpdatedAt,
-        changedFields: changed,
-        dialysisRx: { ...rx.dialysisRx, dialysisDays: [...rx.dialysisRx.dialysisDays] },
-        medications: rx.medications.map(m => ({ ...m })),
-        notes: rx.notes, status: rx.status,
-      };
-      return {
-        ...editDraft,
-        issuedDate: "Recently",
-        status: "Revised" as const,
-        updatedBy: adminName,
-        updatedByRole: "Administrator" as const,
-        lastUpdatedAt: savedAt,
-        history: [entry, ...rx.history],
-      };
-    }));
-    setEditingRxId(null); setEditDraft(null);
+    try {
+      setSaveError(null);
+      const saved = await updatePrescription(editDraft.id, { ...editDraft, updatedBy: adminName, updatedByRole: "Administrator" });
+      setPrescriptions(prev => prev.map(rx => rx.id === saved.id ? saved : rx));
+      setEditingRxId(null); setEditDraft(null);
+    } catch (error) { setSaveError(error instanceof Error ? error.message : "Prescription could not be saved."); }
   };
 
   const updateRxScalar = (field: keyof Omit<RxDialysis, "dialysisDays">, value: string) => {
@@ -3092,6 +3091,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                           <Check className="w-4 h-4" /> Save Prescription
                         </button>
                       </div>
+                      {saveError && <p className="mt-2 text-xs text-red-600 text-right">{saveError}</p>}
                     </div>
                   ) : (
                     /* ── View mode ── */
@@ -3686,7 +3686,7 @@ function RegErrMsg({ error }: { error?: string }) {
   );
 }
 
-function RegisterPatientSection() {
+function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) => void }) {
   const labelCls = "block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5";
 
   // ── All form fields as controlled state ──────────────────────────────────
@@ -3763,6 +3763,7 @@ function RegisterPatientSection() {
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving]       = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // ── Refs for scroll-to-error ──────────────────────────────────────────────
   const refs = {
@@ -3833,7 +3834,7 @@ function RegisterPatientSection() {
     }`;
 
   // ── Submit ────────────────────────────────────────────────────────────────
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setAttempted(true);
     const errs = validate();
     if (Object.keys(errs).length > 0) {
@@ -3842,8 +3843,21 @@ function RegisterPatientSection() {
       return;
     }
     setSaving(true);
-    // Simulate async save — real implementation would POST to API here
-    setTimeout(() => { setSaving(false); setSubmitted(true); }, 800);
+    setSaveError(null);
+    try {
+      const uhid = `KMCRI-${Date.now()}`;
+      const result = await createPatient({
+        uhid, name, age: Number(age), gender, mobile, address, city, bloodGroup,
+        primaryDisease: nativeKidneyDisease, causeOfFailure, treatingNephrologist: nephrologist,
+        insurance, comorbidities: comorbidities.join(", "), remarks, dialysisStartDate: registrationDate,
+        treatmentStatus: patientStatus, viralStatus: { hepatitisB: hbsAg, hepatitisC: hcv, hiv, other: "" },
+        dialysisDaysPerWeek, dialysisDays,
+      });
+      onCreated(result.patient as Patient);
+      setSubmitted(true);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Patient could not be registered.");
+    } finally { setSaving(false); }
   };
 
   // ── Success screen ────────────────────────────────────────────────────────
@@ -3895,6 +3909,7 @@ function RegisterPatientSection() {
           </div>
         </div>
       )}
+      {saveError && <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{saveError}</div>}
 
       {/* ── Personal Information ── */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-5">
@@ -4479,11 +4494,13 @@ function NotificationsSection({
   rxNotifications,
   markRxRead,
   onNavigate,
+  onSystemRead,
 }: {
   notifications: Notification[];
   rxNotifications: RxNotification[];
   markRxRead: (id: string) => void;
   onNavigate: (view: string) => void;
+  onSystemRead: (id: string) => Promise<void>;
 }) {
   const [notifs, setNotifs] = useState(initial);
   const unread = notifs.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
@@ -4500,7 +4517,7 @@ function NotificationsSection({
       <div className="flex items-center justify-between">
         <SectionHeader title="Notifications" subtitle="System alerts and administrative updates" />
         {unread > 0 && (
-          <button onClick={() => { setNotifs(p => p.map(n => ({ ...n, read: true }))); rxNotifications.forEach(n => markRxRead(n.id)); }}
+          <button onClick={() => { setNotifs(p => p.map(n => ({ ...n, read: true }))); notifs.filter(n => !n.read).forEach(n => void onSystemRead(n.id)); rxNotifications.forEach(n => markRxRead(n.id)); }}
             className="flex items-center gap-2 text-sm px-4 py-2 bg-violet-50 text-violet-700 border border-violet-200 rounded-xl hover:bg-violet-100 font-semibold">
             <RefreshCw className="w-3.5 h-3.5" /> Mark All Read
           </button>
@@ -4554,7 +4571,7 @@ function NotificationsSection({
                 <p className="text-xs text-slate-600">{n.detail}</p>
               </div>
               {!n.read && (
-                <button onClick={() => setNotifs(p => p.map(x => x.id === n.id ? { ...x, read: true } : x))}
+                <button onClick={() => { setNotifs(p => p.map(x => x.id === n.id ? { ...x, read: true } : x)); void onSystemRead(n.id); }}
                   className="shrink-0 text-xs text-slate-400 hover:text-slate-600 underline self-start">
                   Dismiss
                 </button>
@@ -5055,15 +5072,24 @@ export default function AdminApp({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [prefillMachine, setPrefillMachine] = useState<Machine | null>(null);
 
-  const [patients] = useState<Patient[]>(INITIAL_PATIENTS);
-  const [machines] = useState<Machine[]>(INITIAL_MACHINES);
-  const [units]    = useState<DialysisUnit[]>(INITIAL_UNITS);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [units, setUnits] = useState<DialysisUnit[]>([]);
   const [sessions, setSessions] = useState<DialysisSession[]>(INITIAL_SESSIONS);
-  const [notifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffError, setStaffError] = useState<string | null>(null);
 
   const unreadCount = notifications.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
 
-  const handleAssigned = (session: DialysisSession, _machineId: string) => setSessions(prev => [session, ...prev]);
+  const handleAssigned = async (session: DialysisSession, _machineId: string) => {
+    const created = await createSession({
+      patientId: session.patientId, machineId: session.machineId, unitId: session.unit,
+      date: session.date, slot: session.slot, status: "waiting", duration: session.duration,
+      doctor: session.doctor, notes: session.notes,
+    });
+    setSessions(prev => [{ ...session, id: created.session.id }, ...prev]);
+  };
   const handleLogout = async () => {
     if (window.confirm("Logout?")) {
       await logoutStaff();
@@ -5077,6 +5103,18 @@ export default function AdminApp({
       <AdminAuthPortal
         onAuthenticate={async data => {
           await onSessionAuthenticated();
+          setStaffLoading(true); setStaffError(null);
+          try {
+            const records = await loadStaffData();
+            setPatients(records.patients); setMachines(records.machines); setUnits(records.units);
+            setSessions(records.sessions); setPrescriptions(records.prescriptions);
+            setNotifications(records.notifications.map(n => ({
+              id: n.id, type: n.type || "info", message: n.message || "Notification",
+              detail: n.detail || "", time: n.created_at || "", read: n.read,
+            })));
+          } catch (error) {
+            setStaffError(error instanceof Error ? error.message : "Saved administrator records could not be loaded.");
+          } finally { setStaffLoading(false); }
           setCurrentUser(data);
           setIsAuthenticated(true);
         }}
@@ -5135,14 +5173,21 @@ export default function AdminApp({
           <LiveScheduleSection
             sessions={sessions}
             units={units}
-            onUpdateSession={(id, updates) => setSessions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s))}
+            onUpdateSession={async (id, updates) => {
+              const next = updates.status === "Running" ? "running" : updates.status === "Waiting" ? "waiting" : "completed";
+              try { await updateSession(id, { status: next }); setSessions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s)); }
+              catch (error) { setStaffError(error instanceof Error ? error.message : "Session status could not be saved."); }
+            }}
           />
         );
       case "patient-history":   return <PatientHistorySection sessions={sessions} prescriptions={prescriptions} />;
       case "machines":          return <MachineSection machines={machines} patients={patients} sessions={sessions} units={units} onAssigned={handleAssigned} />;
       case "viral-status":      return <ViralStatusSection patients={patients} />;
-      case "register-patient":  return <RegisterPatientSection />;
-      case "notifications":     return <NotificationsSection notifications={notifications} rxNotifications={rxNotifications} markRxRead={markRxRead} onNavigate={v => navigate(v as NavSection, v)} />;
+      case "register-patient":  return <RegisterPatientSection onCreated={patient => setPatients(prev => [patient, ...prev])} />;
+      case "notifications":     return <NotificationsSection notifications={notifications} rxNotifications={rxNotifications} markRxRead={id => markRxRead(id)} onNavigate={v => navigate(v as NavSection, v)} onSystemRead={async id => {
+        try { await markNotificationRead(id, true); setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); }
+        catch (error) { setStaffError(error instanceof Error ? error.message : "Notification could not be updated."); }
+      }} />;
       case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} />;
       case "search-patients":
         return (
@@ -5154,8 +5199,16 @@ export default function AdminApp({
       case "missed-slots":
         return (
           <MissedSlotsSection sessions={sessions} patients={patients} machines={machines}
-            onFillSlot={(missed, replacement) => setSessions(prev => [replacement, ...prev])}
-            onUpdateMissedReason={(id, reason, otherText) => setSessions(prev => prev.map(s => s.id === id ? { ...s, missedReason: reason, missedReasonOther: otherText || undefined } : s))} />
+            onFillSlot={async (_missed, replacement) => {
+              try { await handleAssigned(replacement, replacement.machineId); }
+              catch (error) { setStaffError(error instanceof Error ? error.message : "Replacement session could not be saved."); }
+            }}
+            onUpdateMissedReason={async (id, reason, otherText) => {
+              try {
+                await updateSession(id, { status: "missed", missedReason: reason, ...(otherText ? { missedReasonOther: otherText } : {}) });
+                setSessions(prev => prev.map(s => s.id === id ? { ...s, missedReason: reason, missedReasonOther: otherText || undefined } : s));
+              } catch (error) { setStaffError(error instanceof Error ? error.message : "Missed-slot reason could not be saved."); }
+            }} />
         );
       case "analytics":
         return <AnalyticsSection patients={patients} machines={machines} sessions={sessions} prescriptions={prescriptions} isAdmin />;
@@ -5279,6 +5332,11 @@ export default function AdminApp({
         )}
 
         <main className="flex-1 px-4 md:px-6 py-6 max-w-7xl w-full mx-auto">
+          {(staffLoading || staffError) && (
+            <div className={`mb-4 rounded-lg px-3 py-2 text-sm ${staffError ? "bg-red-50 text-red-700" : "bg-violet-50 text-violet-700"}`}>
+              {staffError || "Loading saved administrator records…"}
+            </div>
+          )}
           {renderContent()}
         </main>
 

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
 import type { AdminPrescription, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
 import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, computeChangedFields, formatRxTimestamp } from "../../AdminApp";
+import { updatePrescription } from "../../lib/staffApi";
 
 interface DoctorPrescriptionProps {
   onNavigate: (view: string) => void;
@@ -38,6 +39,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [showHistoryFor, setShowHistoryFor] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const filtered = prescriptions.filter(rx =>
     rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
@@ -52,36 +54,19 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
 
   function cancelEdit() { setEditingId(null); setEditDraft(null); }
 
-  function saveEdit() {
+  async function saveEdit() {
     if (!editDraft) return;
     const original = prescriptions.find(p => p.id === editDraft.id);
     if (!original) return;
     const changed = computeChangedFields(original, editDraft);
-    const savedAt = new Date().toISOString();
-    setPrescriptions(prev => prev.map(rx => {
-      if (rx.id !== editDraft.id) return rx;
-      const archived = {
-        version: rx.history.length > 0 ? rx.history[0].version + 1 : 2,
-        updatedDate: rx.issuedDate,
-        updatedAt: rx.lastUpdatedAt,
-        updatedBy: rx.updatedBy,
-        updatedByRole: rx.updatedByRole,
-        changedFields: changed,
-        dialysisRx: { ...rx.dialysisRx, dialysisDays: [...rx.dialysisRx.dialysisDays] },
-        medications: rx.medications.map(m => ({ ...m })),
-        notes: rx.notes,
-        status: rx.status,
-      };
-      return {
-        ...editDraft,
-        issuedDate: "Recently",
-        updatedBy: doctorName || "Doctor",
-        updatedByRole: "Doctor" as const,
-        status: "Revised" as const,
-        lastUpdatedAt: savedAt,
-        history: [archived, ...rx.history],
-      };
-    }));
+    try {
+      setSaveError(null);
+      const saved = await updatePrescription(editDraft.id, editDraft);
+      setPrescriptions(prev => prev.map(rx => rx.id === saved.id ? saved : rx));
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Prescription could not be saved.");
+      return;
+    }
     addRxNotification({
       doctorName: doctorName || "Doctor",
       patientName: original.patientName,
@@ -225,6 +210,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                             <Check className="w-3 h-3" /> Save Changes
                           </button>
                         </div>
+                         {saveError && <p className="text-xs text-red-600">{saveError}</p>}
                       </div>
 
                       {/* Dialysis Rx */}

@@ -15,3 +15,14 @@ The Replit preview uses the `Start application` workflow with this command.
 ```bash
 npm run build
 ```
+
+## Managed PostgreSQL schema
+
+`server/schema/001_dialysis_core.sql` is the versioned schema source. `npm run
+db:setup` applies it and idempotent synthetic seeds to the development database
+only; task merge invokes this through `scripts/post-merge.sh`.
+
+Replit Publish automatically diffs the development schema against production
+and applies the resulting schema changes. Publish or re-publish after merging a
+schema change. The application does not run schema DDL at startup or in
+production deployment code.

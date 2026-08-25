@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { Activity, TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle, Search, ChevronDown, ChevronUp, Heart, Droplets } from "lucide-react";
+import type { Patient, DialysisSession } from "../../AdminApp";
 
 interface DoctorTreatmentProgressProps {
   onNavigate: (view: string) => void;
+  patients: Patient[];
+  sessions: DialysisSession[];
 }
 
 type ProgressStatus = "On Target" | "Needs Attention" | "Critical" | "Monitoring";
@@ -142,12 +145,22 @@ function AdherenceBar({ rate }: { rate: number }) {
   );
 }
 
-export function DoctorTreatmentProgress({ onNavigate: _onNavigate }: DoctorTreatmentProgressProps) {
+export function DoctorTreatmentProgress({ onNavigate: _onNavigate, patients, sessions }: DoctorTreatmentProgressProps) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const filtered = PROGRESS_DATA.filter(p => {
+  const data: TreatmentProgress[] = patients.map(patient => {
+    const own = sessions.filter(s => s.patientId === patient.id);
+    const completed = own.filter(s => s.attendance === "Completed").length, missed = own.filter(s => s.attendance === "Missed").length;
+    const total = own.length, adherenceRate = total ? Math.round(completed / total * 100) : 0;
+    const progressStatus: ProgressStatus = missed > 2 || adherenceRate < 80 ? "Needs Attention" : total === 0 ? "Monitoring" : "On Target";
+    return { patientId: patient.uhid, patientName: patient.name, diagnosis: patient.primaryDisease, totalSessions: total, completedSessions: completed,
+      missedSessions: missed, adherenceRate, progressStatus, ktV: "Not recorded", urr: "Not recorded", hb: "Not recorded", bp: "Not recorded",
+      weightTrend: "Stable", accessType: "Not recorded", accessCondition: "Good", recentComplication: missed ? `${missed} missed session(s)` : "None",
+      clinicalSummary: patient.remarks || "No clinical summary recorded.", flags: missed ? [`${missed} missed session(s)`] : [] };
+  });
+  const filtered = data.filter(p => {
     const matchSearch = p.patientName.toLowerCase().includes(search.toLowerCase()) ||
       p.patientId.toLowerCase().includes(search.toLowerCase());
     const matchStatus = filterStatus === "All" || p.progressStatus === filterStatus;
@@ -155,10 +168,10 @@ export function DoctorTreatmentProgress({ onNavigate: _onNavigate }: DoctorTreat
   });
 
   const summary = {
-    total:         PROGRESS_DATA.length,
-    onTarget:      PROGRESS_DATA.filter(p => p.progressStatus === "On Target").length,
-    needsAttention: PROGRESS_DATA.filter(p => p.progressStatus === "Needs Attention").length,
-    monitoring:    PROGRESS_DATA.filter(p => p.progressStatus === "Monitoring").length,
+    total:         data.length,
+    onTarget:      data.filter(p => p.progressStatus === "On Target").length,
+    needsAttention: data.filter(p => p.progressStatus === "Needs Attention").length,
+    monitoring:    data.filter(p => p.progressStatus === "Monitoring").length,
   };
 
   return (
@@ -185,14 +198,14 @@ export function DoctorTreatmentProgress({ onNavigate: _onNavigate }: DoctorTreat
       </div>
 
       {/* Flags alert */}
-      {PROGRESS_DATA.some(p => p.flags.length > 0) && (
+       {data.some(p => p.flags.length > 0) && (
         <div className="bg-red-50 border-2 border-red-200 rounded-2xl p-4">
           <div className="flex gap-3 items-start">
             <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-bold text-red-900 mb-2">Active Clinical Flags</p>
               <div className="space-y-1">
-                {PROGRESS_DATA.filter(p => p.flags.length > 0).map(p =>
+                 {data.filter(p => p.flags.length > 0).map(p =>
                   p.flags.map((flag, i) => (
                     <p key={`${p.patientId}-${i}`} className="text-sm text-red-800">
                       <strong>{p.patientName}:</strong> {flag}

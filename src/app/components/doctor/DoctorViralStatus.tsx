@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { FlaskConical, Search, AlertTriangle, CheckCircle, Clock, RefreshCw, Info, ChevronDown, ChevronUp, Shield } from "lucide-react";
+import type { Patient } from "../../AdminApp";
 
 interface DoctorViralStatusProps {
   onNavigate: (view: string) => void;
+  patients: Patient[];
 }
 
 type ViralResult = "Positive" | "Negative" | "Pending" | "Unknown";
@@ -105,17 +107,27 @@ function CategoryBadge({ cat }: { cat: string }) {
   return <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${map[cat] || "bg-purple-100 text-purple-700"}`}>{cat}</span>;
 }
 
-export function DoctorViralStatus({ onNavigate: _onNavigate }: DoctorViralStatusProps) {
+export function DoctorViralStatus({ onNavigate: _onNavigate, patients }: DoctorViralStatusProps) {
   const [search, setSearch] = useState("");
   const [filterRisk, setFilterRisk] = useState("All");
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const pendingCount = VIRAL_DATA.filter(d => d.pendingReview).length;
-  const positiveCount = VIRAL_DATA.filter(d =>
+  const data: ViralPanel[] = patients.map(p => {
+    const viral = p.viralStatus;
+    const result = (v: string): ViralResult => v === "Awaiting Report" ? "Pending" : ["Positive", "Negative"].includes(v) ? v as ViralResult : "Unknown";
+    const hbsAg = result(viral.hepatitisB), hcv = result(viral.hepatitisC), hiv = result(viral.hiv);
+    const pendingReview = [hbsAg, hcv, hiv].some(v => v === "Pending" || v === "Unknown");
+    const positive = [hbsAg, hcv, hiv].some(v => v === "Positive");
+    return { patientId: p.uhid, patientName: p.name, hbsAg, hcv, hiv, lastTested: p.registeredDate || "Not recorded",
+      nextDue: pendingReview ? "Review required" : "Per protocol", machineCategory: hbsAg === "Positive" ? "HBsAg" : hcv === "Positive" ? "HCV" : hiv === "Positive" ? "HIV" : "Negative",
+      riskLevel: positive ? "High" : pendingReview ? "Medium" : "Low", notes: p.remarks, pendingReview };
+  });
+  const pendingCount = data.filter(d => d.pendingReview).length;
+  const positiveCount = data.filter(d =>
     d.hbsAg === "Positive" || d.hcv === "Positive" || d.hiv === "Positive"
   ).length;
 
-  const filtered = VIRAL_DATA.filter(d => {
+  const filtered = data.filter(d => {
     const matchSearch = d.patientName.toLowerCase().includes(search.toLowerCase()) ||
       d.patientId.toLowerCase().includes(search.toLowerCase());
     const matchRisk = filterRisk === "All" || d.riskLevel === filterRisk;
@@ -144,8 +156,8 @@ export function DoctorViralStatus({ onNavigate: _onNavigate }: DoctorViralStatus
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: "Total Patients",    value: VIRAL_DATA.length,   cls: "bg-slate-50 text-slate-700" },
-          { label: "All Clear",         value: VIRAL_DATA.filter(d => d.riskLevel === "Low").length, cls: "bg-emerald-50 text-emerald-700" },
+           { label: "Total Patients",    value: data.length,   cls: "bg-slate-50 text-slate-700" },
+           { label: "All Clear",         value: data.filter(d => d.riskLevel === "Low").length, cls: "bg-emerald-50 text-emerald-700" },
           { label: "Positive Markers",  value: positiveCount,       cls: "bg-red-50 text-red-700" },
           { label: "Pending Review",    value: pendingCount,        cls: "bg-amber-50 text-amber-700" },
         ].map(s => (

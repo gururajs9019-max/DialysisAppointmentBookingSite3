@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { Search, User, Calendar, Activity, FileText, Heart, AlertTriangle, TrendingUp, Phone, Mail } from "lucide-react";
+import type { Patient, DialysisSession } from "../../AdminApp";
 
 interface PatientProfilesProps {
   onNavigate: (view: string) => void;
+  patients: Patient[];
+  sessions: DialysisSession[];
 }
 
-export function PatientProfiles({ onNavigate }: PatientProfilesProps) {
+export function PatientProfiles({ onNavigate, patients: apiPatients, sessions }: PatientProfilesProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<string | null>(null);
 
-  const patients = [
+  const fallbackPatients = [
     {
       id: '1',
       name: 'Rajesh Kumar',
@@ -80,6 +83,14 @@ export function PatientProfiles({ onNavigate }: PatientProfilesProps) {
     },
   ];
 
+  const patients = apiPatients.map(patient => ({
+    id: patient.id, name: patient.name, age: String(patient.age || "—"), phone: patient.mobile || "Not recorded",
+    email: "Not recorded", diagnosis: patient.primaryDisease || "Not recorded", dialysisType: "Hemodialysis",
+    frequency: patient.dialysisDaysPerWeek ? `${patient.dialysisDaysPerWeek} sessions/week` : "Not recorded",
+    lastSession: patient.lastDialysis || "Not recorded", nextSession: patient.currentSchedule || "Not scheduled",
+    adherence: "See treatment progress", complications: patient.remarks || "None", vitals: { bp: "Not recorded", hr: "Not recorded", weight: "Not recorded" },
+    treatments: sessions.filter(session => session.patientId === patient.id).length, status: patient.treatmentStatus === "Active" ? "active" : "priority",
+  }));
   const filteredPatients = patients.filter(patient =>
     patient.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     patient.diagnosis.toLowerCase().includes(searchQuery.toLowerCase())

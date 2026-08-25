@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { Calendar, ChevronLeft, ChevronRight, Clock, Settings, CheckCircle, X } from "lucide-react";
+import type { DialysisSession } from "../../AdminApp";
+import { addLocalDays, localDateKey, sessionsByWeekDate, sessionsForDate, weekDateKeys } from "../../lib/scheduleDateMapping.mjs";
 
 interface DoctorScheduleProps {
   onNavigate: (view: string) => void;
+  sessions: DialysisSession[];
 }
 
 type ViewMode = "daily" | "weekly";
@@ -77,19 +80,23 @@ function getStatusIcon(status: string) {
   }
 }
 
-export function DoctorSchedule({ onNavigate }: DoctorScheduleProps) {
+export function DoctorSchedule({ onNavigate, sessions: apiSessions }: DoctorScheduleProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("daily");
   const [activeSlot, setActiveSlot] = useState<string>("all");
+  const [displayDate, setDisplayDate] = useState(() => new Date());
+  const displayedDateKey = localDateKey(displayDate);
+  const displayedWeek = weekDateKeys(displayDate);
 
-  const filteredSessions = activeSlot === "all"
-    ? TODAY_SESSIONS
-    : TODAY_SESSIONS.filter(s => s.slot === activeSlot);
+  const sourceSessions = apiSessions.map(s => ({ id: s.id, date: s.date, slot: s.slot.replace("Slot ", "S"), patient: s.patientName, machine: s.machine, unit: s.unit, status: s.status === "Running" ? "in-progress" : s.status === "Waiting" ? "pending" : s.attendance === "Cancelled" ? "cancelled" : s.attendance === "Completed" ? "completed" : "scheduled", priority: "normal" })).filter(s => s.slot === "S1" || s.slot === "S2" || s.slot === "S3");
+  const dailySessions = sessionsForDate(sourceSessions, displayedDateKey);
+  const weeklySessions = sessionsByWeekDate(sourceSessions, displayedWeek);
+  const filteredSessions = activeSlot === "all" ? dailySessions : dailySessions.filter(s => s.slot === activeSlot);
 
   const stats = {
-    completed:  TODAY_SESSIONS.filter(s => s.status === "completed").length,
-    inProgress: TODAY_SESSIONS.filter(s => s.status === "in-progress").length,
-    scheduled:  TODAY_SESSIONS.filter(s => s.status === "scheduled").length,
-    pending:    TODAY_SESSIONS.filter(s => s.status === "pending").length,
+    completed: dailySessions.filter(s => s.status === "completed").length,
+    inProgress: dailySessions.filter(s => s.status === "in-progress").length,
+    scheduled: dailySessions.filter(s => s.status === "scheduled").length,
+    pending: dailySessions.filter(s => s.status === "pending").length,
   };
 
   return (
@@ -103,7 +110,7 @@ export function DoctorSchedule({ onNavigate }: DoctorScheduleProps) {
       {/* Slot summary cards */}
       <div className="grid grid-cols-3 gap-4">
         {SLOTS.map(slot => {
-          const count = TODAY_SESSIONS.filter(s => s.slot === slot.id).length;
+           const count = dailySessions.filter(s => s.slot === slot.id).length;
           return (
             <div key={slot.id} className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{slot.label}</p>
@@ -117,16 +124,15 @@ export function DoctorSchedule({ onNavigate }: DoctorScheduleProps) {
       {/* Controls bar */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
         <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-          {/* Navigation (decorative) */}
           <div className="flex items-center gap-3">
-            <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <button onClick={() => setDisplayDate(date => addLocalDays(date, viewMode === "weekly" ? -7 : -1))} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
               <ChevronLeft className="w-5 h-5 text-gray-700" />
             </button>
-            <div className="text-center">
-              <p className="font-semibold text-gray-900">Today</p>
+            <button onClick={() => setDisplayDate(new Date())} className="text-center">
+              <p className="font-semibold text-gray-900">{displayedDateKey === localDateKey(new Date()) ? "Today" : displayedDateKey}</p>
               <p className="text-xs text-gray-500">Daily Dialysis Schedule</p>
-            </div>
-            <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            </button>
+            <button onClick={() => setDisplayDate(date => addLocalDays(date, viewMode === "weekly" ? 7 : 1))} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
               <ChevronRight className="w-5 h-5 text-gray-700" />
             </button>
           </div>
@@ -263,8 +269,8 @@ export function DoctorSchedule({ onNavigate }: DoctorScheduleProps) {
             <thead>
               <tr className="border-b-2 border-slate-100">
                 <th className="py-3 px-4 text-left text-sm font-bold text-slate-600">Slot</th>
-                {WEEK_DAYS.map(d => (
-                  <th key={d} className="py-3 px-3 text-center text-sm font-bold text-slate-600">{d}</th>
+                 {WEEK_DAYS.map(d => (
+                   <th key={d} className="py-3 px-3 text-center text-sm font-bold text-slate-600">{d}</th>
                 ))}
               </tr>
             </thead>
@@ -275,8 +281,8 @@ export function DoctorSchedule({ onNavigate }: DoctorScheduleProps) {
                     <p className="font-bold text-slate-700 text-sm">{slot.label}</p>
                     <p className="text-slate-400 text-xs">{slot.time}</p>
                   </td>
-                  {WEEK_DAYS.map(day => {
-                    const patients = WEEKLY_DATA[slot.id]?.[day] || [];
+                   {WEEK_DAYS.map((day, index) => {
+                     const patients = weeklySessions[displayedWeek[index]].filter(s => s.slot === slot.id).map(s => s.patient);
                     return (
                       <td key={day} className="py-4 px-3 align-top">
                         <div className="space-y-1">

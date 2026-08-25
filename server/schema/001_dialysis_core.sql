@@ -1,0 +1,122 @@
+-- Dialysis service schema source, version 001.
+-- Replit applies development schema changes to production through Publish.
+-- This file is not executed by the application server at startup.
+
+-- Legacy appointment and staff tables are retained for backwards compatibility.
+CREATE TABLE IF NOT EXISTS dialysis_appointments (
+  id text PRIMARY KEY,
+  data jsonb NOT NULL,
+  status text NOT NULL CHECK (status IN ('upcoming', 'completed', 'cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS portal_users (
+  id text PRIMARY KEY,
+  username text UNIQUE,
+  email text UNIQUE NOT NULL,
+  name text NOT NULL,
+  role text NOT NULL CHECK (role IN ('doctor', 'admin')),
+  password_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS dialysis_units (
+  id text PRIMARY KEY,
+  name text NOT NULL UNIQUE,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS dialysis_machines (
+  id text PRIMARY KEY,
+  unit_id text NOT NULL REFERENCES dialysis_units(id),
+  code text NOT NULL UNIQUE,
+  name text NOT NULL,
+  category text NOT NULL CHECK (category IN ('Negative', 'HCV', 'HBsAg', 'HIV', 'RVD (HIV)')),
+  status text NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'in-use', 'scheduled', 'maintenance', 'disabled')),
+  notes text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS patients (
+  id text PRIMARY KEY,
+  uhid text NOT NULL UNIQUE,
+  data jsonb NOT NULL,
+  viral_category text NOT NULL CHECK (viral_category IN ('Negative', 'HCV', 'HBsAg', 'HIV', 'Unknown')),
+  lifecycle text NOT NULL DEFAULT 'Active' CHECK (lifecycle IN ('Active', 'Transplanted', 'Expired', 'Shifted', 'Discontinued')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS dialysis_sessions (
+  id text PRIMARY KEY,
+  patient_id text NOT NULL REFERENCES patients(id),
+  machine_id text NOT NULL REFERENCES dialysis_machines(id),
+  unit_id text NOT NULL REFERENCES dialysis_units(id),
+  session_date date NOT NULL,
+  slot text NOT NULL,
+  status text NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'waiting', 'running', 'completed', 'missed', 'cancelled')),
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by text NOT NULL REFERENCES portal_users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS active_machine_slot
+  ON dialysis_sessions(machine_id, session_date, slot)
+  WHERE status NOT IN ('cancelled', 'missed');
+
+CREATE UNIQUE INDEX IF NOT EXISTS active_patient_slot
+  ON dialysis_sessions(patient_id, session_date, slot)
+  WHERE status NOT IN ('cancelled', 'missed');
+
+CREATE TABLE IF NOT EXISTS prescriptions (
+  id text PRIMARY KEY,
+  patient_id text NOT NULL REFERENCES patients(id),
+  version integer NOT NULL DEFAULT 1,
+  status text NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Revised', 'Discontinued')),
+  data jsonb NOT NULL,
+  created_by text NOT NULL REFERENCES portal_users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS prescription_versions (
+  id text PRIMARY KEY,
+  prescription_id text NOT NULL REFERENCES prescriptions(id),
+  version integer NOT NULL,
+  snapshot jsonb NOT NULL,
+  changed_by text NOT NULL REFERENCES portal_users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (prescription_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS clinical_notes (
+  id text PRIMARY KEY,
+  patient_id text NOT NULL REFERENCES patients(id),
+  session_id text REFERENCES dialysis_sessions(id),
+  body text NOT NULL,
+  author_id text NOT NULL REFERENCES portal_users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id text PRIMARY KEY,
+  user_id text REFERENCES portal_users(id),
+  type text NOT NULL CHECK (type IN ('warning', 'info', 'error', 'success')),
+  message text NOT NULL,
+  detail text NOT NULL DEFAULT '',
+  read boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id text PRIMARY KEY,
+  actor_id text REFERENCES portal_users(id),
+  action text NOT NULL,
+  entity_type text NOT NULL,
+  entity_id text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);

@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { FileText, Plus, Search, User, Edit, Trash2, X, ChevronDown, Check } from "lucide-react";
-import { INITIAL_PATIENTS, type Patient } from "../../AdminApp";
+import type { Patient } from "../../AdminApp";
+import { createClinicalNote, fetchClinicalNotes } from "../../lib/staffApi";
 
 interface ClinicalNotesProps {
   onNavigate: (view: string) => void;
+  patients: Patient[];
 }
 
 interface NoteVitals {
@@ -32,10 +34,12 @@ function PatientSearchSelect({
   value,
   onChange,
   error,
+  patients,
 }: {
   value: Patient | null;
   onChange: (p: Patient | null) => void;
   error?: boolean;
+  patients: Patient[];
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -43,8 +47,8 @@ function PatientSearchSelect({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = query.trim().length === 0
-    ? INITIAL_PATIENTS
-    : INITIAL_PATIENTS.filter(p =>
+    ? patients
+    : patients.filter(p =>
         p.name.toLowerCase().includes(query.toLowerCase())
       );
 
@@ -151,7 +155,7 @@ function PatientSearchSelect({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
+export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNotesProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedNote, setSelectedNote] = useState<string | null>(null);
@@ -166,44 +170,24 @@ export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
   const [formWeight, setFormWeight] = useState("");
   const [formTemp, setFormTemp] = useState("");
   const [patientError, setPatientError] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
 
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: "1",
-      patientName: "Rajesh Kumar",
-      patientId: "P-001",
-      patientUhid: "P-001",
-      date: "Recently",
-      noteType: "session",
-      title: "Routine Session",
-      content: "Patient tolerated dialysis session well. No complications during treatment. Fluid removal achieved target goals. Patient reports feeling better with improved energy levels.",
-      vitals: { bloodPressure: "Normal", heartRate: "Normal", weight: "Stable", temperature: "Normal" },
-      author: "Dr. Arun Mehta",
-    },
-    {
-      id: "2",
-      patientName: "Priya Sharma",
-      patientId: "P-002",
-      patientUhid: "P-002",
-      date: "Recently",
-      noteType: "assessment",
-      title: "Follow-up Assessment",
-      content: "Continued improvement noted. Patient adherence to diet and fluid restrictions good. Lab values trending in positive direction. Will continue current treatment protocol.",
-      vitals: { bloodPressure: "Slightly elevated", heartRate: "Normal", weight: "Decreasing", temperature: "Normal" },
-      author: "Dr. Arun Mehta",
-    },
-    {
-      id: "3",
-      patientName: "Vikram Singh",
-      patientId: "P-003",
-      patientUhid: "P-003",
-      date: "Recently",
-      noteType: "assessment",
-      title: "Monthly Assessment",
-      content: "Overall condition stable. Adherence to treatment schedule excellent. Laboratory values within acceptable range. Continue current treatment plan.",
-      author: "Dr. Arun Mehta",
-    },
-  ]);
+  const loadNotes = async (patient: Patient) => {
+    setNotesLoading(true); setNotesError(null);
+    try {
+      const result = await fetchClinicalNotes(patient.id);
+      setNotes(result.notes.map(note => ({
+        id: note.id, patientName: patient.name, patientId: patient.id, patientUhid: patient.uhid,
+        date: note.created_at, noteType: "general", title: "Clinical Note", content: note.body, author: note.author_name || "Staff",
+      })));
+    } catch (error) { setNotesError(error instanceof Error ? error.message : "Clinical notes could not be loaded."); }
+    finally { setNotesLoading(false); }
+  };
+
+  useEffect(() => { if (formPatient) void loadNotes(formPatient); }, [formPatient]);
 
   const filteredNotes = notes.filter(note =>
     note.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -228,33 +212,18 @@ export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
     setShowAddForm(false);
   }
 
-  function handleSaveNote(e: React.FormEvent) {
+  async function handleSaveNote(e: React.FormEvent) {
     e.preventDefault();
     if (!formPatient) {
       setPatientError(true);
       return;
     }
-    const hasVitals = formBP || formHR || formWeight || formTemp;
-    const newNote: Note = {
-      id: String(Date.now()),
-      patientName: formPatient.name,
-      patientId: formPatient.id,
-      patientUhid: formPatient.uhid,
-      date: "Recently",
-      noteType: formNoteType,
-      title: formTitle || "Clinical Note",
-      content: formContent,
-      vitals: hasVitals ? {
-        bloodPressure: formBP || "—",
-        heartRate: formHR || "—",
-        weight: formWeight || "—",
-        temperature: formTemp || "—",
-      } : undefined,
-      author: "Dr.",
-    };
-    setNotes(prev => [newNote, ...prev]);
-    resetForm();
-    setShowAddForm(false);
+    try {
+      setSaveError(null);
+      await createClinicalNote(formPatient.id, `${formTitle || "Clinical Note"} [${formNoteType}]\n${formContent}`);
+      await loadNotes(formPatient);
+      resetForm(); setShowAddForm(false);
+    } catch (error) { setSaveError(error instanceof Error ? error.message : "Clinical note could not be saved."); }
   }
 
   const getNoteTypeColor = (type: string) => {
@@ -309,6 +278,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
                   value={formPatient}
                   onChange={p => { setFormPatient(p); setPatientError(false); }}
                   error={patientError}
+                  patients={patients}
                 />
                 {patientError && (
                   <p className="mt-1 text-xs text-red-500">Please select a patient.</p>
@@ -413,11 +383,15 @@ export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
                 Cancel
               </button>
             </div>
+            {saveError && <p className="text-sm text-red-600">{saveError}</p>}
           </form>
         </div>
       )}
 
       {/* Search and Filter */}
+      {notesLoading && <p className="text-sm text-blue-700">Loading saved notes…</p>}
+      {notesError && <p className="text-sm text-red-600">{notesError}</p>}
+      {!formPatient && !notesLoading && <p className="text-sm text-slate-500">Select a patient in the note form to view that patient’s saved clinical notes.</p>}
       <div className="bg-white rounded-lg shadow-md p-4">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1 relative">
@@ -483,8 +457,10 @@ export function ClinicalNotes({ onNavigate: _onNavigate }: ClinicalNotesProps) {
                   <Edit className="w-4 h-4" />
                 </button>
                 <button
+                  disabled
+                  title="Clinical-note deletion is not available in the saved records API."
                   className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                  onClick={e => { e.stopPropagation(); setNotes(prev => prev.filter(n => n.id !== note.id)); }}
+                  onClick={e => e.stopPropagation()}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
