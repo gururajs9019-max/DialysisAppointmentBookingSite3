@@ -24,6 +24,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    host: '0.0.0.0',
+    port: 5000,
+    allowedHosts: ['.replit.dev'],
+  },
   resolve: {
     alias: {
       // Alias @ to the src directory
