@@ -257,7 +257,7 @@ export default function DoctorApp({
         )}
 
         {view === "treatment-progress" && (
-          <DoctorTreatmentProgress onNavigate={handleNavigate} patients={patients} sessions={sessions} />
+          <DoctorTreatmentProgress onNavigate={handleNavigate} patients={patients} sessions={sessions} prescriptions={prescriptions} />
         )}
       </main>
 

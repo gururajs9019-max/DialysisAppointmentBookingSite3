@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Activity, TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle, Search, ChevronDown, ChevronUp, Heart, Droplets } from "lucide-react";
-import type { Patient, DialysisSession } from "../../AdminApp";
+import { Activity, TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle, Search, ChevronDown, ChevronUp, Heart, Droplets, FileText, Edit3, FlaskConical } from "lucide-react";
+import type { Patient, DialysisSession, AdminPrescription } from "../../AdminApp";
 
 interface DoctorTreatmentProgressProps {
   onNavigate: (view: string) => void;
   patients: Patient[];
   sessions: DialysisSession[];
+  prescriptions: AdminPrescription[];
 }
 
 type ProgressStatus = "On Target" | "Needs Attention" | "Critical" | "Monitoring";
@@ -145,7 +146,18 @@ function AdherenceBar({ rate }: { rate: number }) {
   );
 }
 
-export function DoctorTreatmentProgress({ onNavigate: _onNavigate, patients, sessions }: DoctorTreatmentProgressProps) {
+const displayValue = (value: unknown): string => {
+  if (value === null || value === undefined || value === "") return "Not available";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return value.length ? value.map(displayValue).join(", ") : "Not available";
+  if (typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, item]) => `${key}: ${displayValue(item)}`).join(" · ") || "Not available";
+  return String(value);
+};
+
+const fieldValue = (record: Record<string, unknown> | undefined, ...keys: string[]) =>
+  displayValue(keys.map(key => record?.[key]).find(value => value !== null && value !== undefined && value !== ""));
+
+export function DoctorTreatmentProgress({ onNavigate, patients, sessions, prescriptions }: DoctorTreatmentProgressProps) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -244,6 +256,10 @@ export function DoctorTreatmentProgress({ onNavigate: _onNavigate, patients, ses
       <div className="space-y-4">
         {filtered.map(p => {
           const isExpanded = expanded === p.patientId;
+          const patient = patients.find(item => item.uhid === p.patientId);
+          const prescription = patient ? prescriptions.find(item => item.patientId === patient.id) : undefined;
+          const medicalInfo = patient?.medicalInfo || {};
+          const investigations = patient?.investigations || {};
           return (
             <div key={p.patientId}
               className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${
@@ -307,6 +323,82 @@ export function DoctorTreatmentProgress({ onNavigate: _onNavigate, patients, ses
                         <p className="text-sm font-bold text-slate-700">{item.value}</p>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Patient and medical detail */}
+                  {patient && (
+                    <>
+                      <div className="mb-5">
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Patient Information</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {[
+                            ["UHID", patient.uhid], ["Age / Gender", `${patient.age} yrs · ${patient.gender}`],
+                            ["Blood Group", patient.bloodGroup], ["Nephrologist", patient.treatingNephrologist],
+                            ["Primary Disease", patient.primaryDisease], ["Viral Status", `HBsAg: ${patient.viralStatus.hepatitisB} · HCV: ${patient.viralStatus.hepatitisC} · HIV: ${patient.viralStatus.hiv}`],
+                            ["Dialysis Days", patient.dialysisDays.join(", ") || "Not available"], ["Treatment Status", patient.treatmentStatus],
+                          ].map(([label, value]) => (
+                            <div key={label} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">{label}</p>
+                              <p className="text-xs font-semibold text-slate-700">{value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="mb-5">
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5 text-blue-600" /> Medical Information</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {[
+                            ["Comorbidities", patient.comorbidities], ["Dialysis Access", fieldValue(medicalInfo, "dialysisAccess", "access", "accessType")],
+                            ["CBC", fieldValue(investigations, "cbc", "CBC")], ["Renal Function Test", fieldValue(investigations, "rft", "renalFunctionTest", "RFT")],
+                            ["LFT", fieldValue(investigations, "lft", "LFT")], ["Serum Calcium", fieldValue(investigations, "serumCalcium", "calcium")],
+                            ["Serum Phosphorous", fieldValue(investigations, "serumPhosphorous", "phosphorous", "phosphorus")], ["Serum Ferritin", fieldValue(investigations, "serumFerritin", "ferritin")],
+                            ["Thyroid Profile", fieldValue(investigations, "thyroidProfile", "thyroid")], ["2D Echo", fieldValue(investigations, "twoDEcho", "echo2d", "echo")],
+                            ["Ejection Fraction", fieldValue(investigations, "ejectionFraction", "ef")], ["OPD / IPD", fieldValue(medicalInfo, "opdIpd", "opd_ipd")],
+                          ].map(([label, value]) => (
+                            <div key={label} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">{label}</p>
+                              <p className="text-xs font-semibold text-slate-700">{value || "Not available"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Dialysis prescription */}
+                  <div className="mb-5 border-t border-slate-100 pt-4">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><FileText className="w-3.5 h-3.5 text-blue-600" /> Dialysis Prescription</h3>
+                      {prescription && <button onClick={() => onNavigate("prescription")} className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800"><Edit3 className="w-3.5 h-3.5" /> Edit Prescription</button>}
+                    </div>
+                    {!prescription ? (
+                      <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-400">No dialysis prescription created yet.</p>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {[
+                            ["Weekly Sessions", prescription.dialysisRx.weeklySessionsCount], ["Dialysis Days", prescription.dialysisRx.dialysisDays.join(", ")],
+                            ["Slot", prescription.dialysisRx.slot], ["Duration", prescription.dialysisRx.duration],
+                            ["Blood Flow", prescription.dialysisRx.bloodFlow], ["Dialysate Flow", prescription.dialysisRx.dialysateFlow],
+                            ["Dialyzer", prescription.dialysisRx.membrane], ["Dry Weight", prescription.dialysisRx.dryWeight],
+                            ["Anticoagulation", prescription.dialysisRx.anticoagulation],
+                          ].map(([label, value]) => (
+                            <div key={label} className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
+                              <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-0.5">{label}</p>
+                              <p className="text-xs font-semibold text-blue-900">{value || "Not available"}</p>
+                            </div>
+                          ))}
+                        </div>
+                        {prescription.medications.length > 0 && (
+                          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-100">
+                            <table className="w-full text-xs"><thead><tr className="bg-slate-50 text-slate-500"><th className="text-left px-3 py-2">Medication</th><th className="text-left px-3 py-2">Dose</th><th className="text-left px-3 py-2">Frequency</th><th className="text-left px-3 py-2">Route</th></tr></thead>
+                              <tbody>{prescription.medications.map((med, index) => <tr key={index} className="border-t border-slate-50"><td className="px-3 py-2 font-semibold text-slate-700">{med.name}</td><td className="px-3 py-2">{med.dose}</td><td className="px-3 py-2">{med.frequency}</td><td className="px-3 py-2">{med.route}</td></tr>)}</tbody>
+                            </table>
+                          </div>
+                        )}
+                        <p className="mt-3 text-xs text-slate-500">Created by {prescription.createdBy || prescription.updatedBy} ({prescription.createdByRole || prescription.updatedByRole}) · Last edited by {prescription.updatedBy} ({prescription.updatedByRole})</p>
+                      </>
+                    )}
                   </div>
 
                   {/* Clinical parameters */}

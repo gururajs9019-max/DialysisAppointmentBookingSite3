@@ -56,6 +56,8 @@ const asPatient = (p: Partial<Patient>): Patient => ({
   emergencyContact: p.emergencyContact || "", insurance: p.insurance || "", remarks: p.remarks || "",
   treatmentStatus: p.treatmentStatus || "Active", registeredDate: p.registeredDate || "", lastDialysis: p.lastDialysis || "",
   currentSchedule: p.currentSchedule || null, dialysisDaysPerWeek: p.dialysisDaysPerWeek || 0, dialysisDays: p.dialysisDays || [],
+  dateOfBirth: p.dateOfBirth || "", registrationFields: p.registrationFields || {},
+  medicalInfo: p.medicalInfo || {}, investigations: p.investigations || {},
 });
 
 const asMachine = (m: Record<string, unknown>): Machine => ({
@@ -119,15 +121,17 @@ function asMedications(value: unknown): RxMedication[] {
 const asPrescription = (p: Record<string, any>): AdminPrescription => ({
   id: p.id, patientId: p.patientId, patientName: p.patientName || "", patientUhid: p.patientUhid || "",
   diagnosis: p.diagnosis || "", status: p.status || "Active", issuedDate: p.createdAt || "", updatedBy: p.updatedBy || "Staff",
-  updatedByRole: "Doctor", lastUpdatedAt: p.updatedAt, dialysisRx: asDialysisRx(p.dialysisRx),
+  updatedByRole: p.updatedByRole || "Doctor", lastUpdatedAt: p.updatedAt, dialysisRx: asDialysisRx(p.dialysisRx),
   medications: asMedications(p.medications), notes: p.notes || "", history: [],
+  version: Number(p.version) || 1, createdAt: p.createdAt, createdBy: p.createdBy || p.updatedBy || "Staff",
+  createdByRole: p.createdByRole || p.updatedByRole || "Doctor",
 }) as AdminPrescription;
 
 const asHistory = (row: Record<string, any>): AdminPrescription["history"][number] => {
   const snapshot = row.snapshot || {};
   return {
     version: row.version, updatedDate: row.created_at || "", updatedAt: row.created_at,
-    updatedBy: "Staff", updatedByRole: "Doctor", changedFields: [],
+    updatedBy: row.changed_by_name || "Staff", updatedByRole: row.changed_by_role || "Doctor", changedFields: [],
     dialysisRx: asDialysisRx(snapshot.dialysisRx), medications: asMedications(snapshot.medications),
     notes: snapshot.notes || "", status: snapshot.status || "Active",
   } as AdminPrescription["history"][number];
@@ -138,9 +142,35 @@ export async function fetchPrescriptions(): Promise<AdminPrescription[]> {
   const prescriptions = result.prescriptions.map(asPrescription);
   await Promise.all(prescriptions.map(async prescription => {
     const history = await request<{ history: Record<string, any>[] }>(`/api/prescriptions/${encodeURIComponent(prescription.id)}/history`);
-    prescription.history = history.history.map(asHistory).sort((a, b) => b.version - a.version);
+    prescription.history = history.history
+      .filter(row => !prescription.version || Number(row.version) < prescription.version)
+      .map(asHistory)
+      .sort((a, b) => b.version - a.version);
   }));
   return prescriptions;
+}
+
+export async function fetchPatientById(id: string): Promise<Patient> {
+  const result = await request<{ patient: Partial<Patient> }>(`/api/patients/${encodeURIComponent(id)}`);
+  return asPatient(result.patient);
+}
+
+export async function createPrescription(patientId: string, prescription: AdminPrescription): Promise<AdminPrescription> {
+  await request("/api/prescriptions", {
+    method: "POST",
+    body: JSON.stringify({
+      patientId,
+      diagnosis: prescription.diagnosis,
+      dialysisRx: prescription.dialysisRx,
+      medications: prescription.medications,
+      notes: prescription.notes,
+      status: "Active",
+    }),
+  }, "save");
+  const refreshed = await fetchPrescriptions();
+  const saved = refreshed.find(item => item.patientId === patientId);
+  if (!saved) throw new StaffApiError("The new prescription could not be reloaded.", "load");
+  return saved;
 }
 
 export async function loadStaffData(): Promise<StaffData> {

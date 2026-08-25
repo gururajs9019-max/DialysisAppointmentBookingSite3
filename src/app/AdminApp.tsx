@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { logoutStaff } from "./lib/appointmentApi";
 import { persistQuickAssignment } from "./lib/quickAssignment.mjs";
-import { createMachine, createPatient, createSession, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -62,6 +62,10 @@ export interface Patient {
   lastDialysis: string; currentSchedule: string | null;
   dialysisDaysPerWeek: number;
   dialysisDays: string[];
+  dateOfBirth?: string;
+  registrationFields?: Record<string, unknown>;
+  medicalInfo?: Record<string, unknown>;
+  investigations?: Record<string, unknown>;
 }
 
 interface DialysisUnit {
@@ -166,6 +170,10 @@ export interface AdminPrescription {
   lastUpdatedAt?: string;
   dialysisRx: RxDialysis; medications: RxMedication[];
   notes: string; history: PrescriptionHistoryEntry[];
+  version?: number;
+  createdAt?: string;
+  createdBy?: string;
+  createdByRole?: "Administrator" | "Doctor";
 }
 export interface RxNotification {
   id: string; doctorName: string; patientName: string; patientUhid: string;
@@ -1138,23 +1146,52 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel }: {
 
 // ─── Assign Patient Section (4-step wizard) ───────────────────────────────────
 
-function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine }: {
+function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine, prefillPatientId }: {
   patients: Patient[]; machines: Machine[]; units: DialysisUnit[];
   sessions: DialysisSession[];
   onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
   prefillMachine?: Machine | null;
+  prefillPatientId?: string | null;
 }) {
   const prefillUnit = prefillMachine
     ? units.find(u => u.id === prefillMachine.unit) ?? null
     : null;
 
-  const [step, setStep] = useState<AssignStep>(prefillMachine ? 3 : 1);
+  const [step, setStep] = useState<AssignStep>(prefillMachine ? 3 : prefillPatientId ? 2 : 1);
   const [draft, setDraft] = useState<AssignmentDraft>({
     patient: null, unit: prefillUnit, machine: prefillMachine ?? null,
     slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: "",
     slotType: "", emergencyTime: "",
   });
   const [showConfirm, setShowConfirm] = useState(false);
+  const [prefillLoading, setPrefillLoading] = useState(Boolean(prefillPatientId));
+  const [prefillError, setPrefillError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!prefillPatientId) {
+      setPrefillLoading(false);
+      setPrefillError(null);
+      return;
+    }
+    let cancelled = false;
+    setPrefillLoading(true);
+    setPrefillError(null);
+    setDraft(d => ({ ...d, patient: null, unit: null, machine: prefillMachine ?? null }));
+    setStep(prefillMachine ? 3 : 1);
+    fetchPatientById(prefillPatientId)
+      .then(patient => {
+        if (cancelled) return;
+        setDraft(d => ({ ...d, patient, unit: prefillUnit, machine: prefillMachine ?? null }));
+        setStep(prefillMachine ? 3 : 2);
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setPrefillError(error instanceof Error ? error.message : "Patient could not be found.");
+        setStep(1);
+      })
+      .finally(() => { if (!cancelled) setPrefillLoading(false); });
+    return () => { cancelled = true; };
+  }, [prefillPatientId, prefillMachine, prefillUnit]);
 
   const setField = (key: keyof AssignmentDraft, value: string) =>
     setDraft(d => ({ ...d, [key]: value }));
@@ -1253,6 +1290,17 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
 
       {/* Step content */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        {prefillLoading && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-700">
+            <RefreshCw className="h-4 w-4 animate-spin" /> Loading the selected patient…
+          </div>
+        )}
+        {prefillError && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>{prefillError} Search for a patient below to choose one manually.</span>
+          </div>
+        )}
         {step === 1 && (
           <>
             <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
@@ -1897,7 +1945,7 @@ const WEEK_DAYS_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Frid
 function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
   patients: Patient[]; machines: Machine[]; sessions: DialysisSession[];
   units: DialysisUnit[];
-  onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine }) => void;
+  onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
 
@@ -2072,7 +2120,12 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-bold text-slate-800">{patient.name}</p>
+                          <button
+                            onClick={() => onNavigate("assign-patient", "Assign Patient", { patientId: patient.id })}
+                            className="font-bold text-slate-800 hover:text-violet-700 hover:underline text-left"
+                          >
+                            {patient.name}
+                          </button>
                           <span className="text-xs text-slate-400">{patient.uhid}</span>
                           {session?.slotType === "emergency" && (
                             <span className="px-1.5 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded-full text-[9px] font-bold">Emergency</span>
@@ -2091,7 +2144,7 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
                         : <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500 border border-slate-200">Scheduled</span>}
                       {!session && patient.treatmentStatus === "Active" && (
                         <button
-                          onClick={() => onNavigate("assign-patient", "Assign Patient")}
+                          onClick={() => onNavigate("assign-patient", "Assign Patient", { patientId: patient.id })}
                           className="px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-bold hover:bg-violet-700">
                           Assign
                         </button>
@@ -2796,6 +2849,42 @@ function RxStatusBadge({ status }: { status: AdminPrescription["status"] }) {
   return <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${map[status]}`}>{status}</span>;
 }
 
+function formatDetailValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "Not available";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return value.length ? value.map(formatDetailValue).join(", ") : "Not available";
+  if (typeof value === "object") {
+    const values = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== null && item !== undefined && item !== "")
+      .map(([key, item]) => `${key.replace(/([A-Z])/g, " $1")}: ${formatDetailValue(item)}`);
+    return values.length ? values.join(" · ") : "Not available";
+  }
+  return String(value);
+}
+
+function firstDetailValue(...values: unknown[]): string {
+  const value = values.find(item => item !== null && item !== undefined && item !== "");
+  return value === undefined ? "Not available" : formatDetailValue(value);
+}
+
+function recordValue(record: Record<string, unknown> | undefined, ...keys: string[]): unknown {
+  if (!record) return undefined;
+  return keys.map(key => record[key]).find(value => value !== null && value !== undefined && value !== "");
+}
+
+function blankPrescription(patient: Patient): AdminPrescription {
+  return {
+    id: "", patientId: patient.id, patientName: patient.name, patientUhid: patient.uhid,
+    diagnosis: patient.primaryDisease || "", status: "Active", issuedDate: "", updatedBy: "",
+    updatedByRole: "Administrator", dialysisRx: {
+      weeklySessionsCount: patient.dialysisDaysPerWeek ? `${patient.dialysisDaysPerWeek} Sessions / Week` : "3 Sessions / Week",
+      dialysisDays: patient.dialysisDays || [], slot: "", duration: "4 Hours", bloodFlow: "", dialysateFlow: "",
+      membrane: "", dryWeight: "", anticoagulation: "",
+    },
+    medications: [], notes: "", history: [],
+  };
+}
+
 function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName }: {
   patients: Patient[];
   prescriptions: AdminPrescription[];
@@ -2807,6 +2896,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingRxId, setEditingRxId] = useState<string | null>(null);
+  const [creatingPatientId, setCreatingPatientId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -2828,15 +2918,26 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setExpandedId(rx.patientId);
   };
-  const cancelEdit = () => { setEditingRxId(null); setEditDraft(null); };
+  const startCreate = (patient: Patient) => {
+    setCreatingPatientId(patient.id);
+    setEditingRxId(null);
+    setEditDraft(blankPrescription(patient));
+    setExpandedId(patient.id);
+    setSaveError(null);
+  };
+  const cancelEdit = () => { setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null); };
 
   const saveEdit = async () => {
     if (!editDraft) return;
     try {
       setSaveError(null);
-      const saved = await updatePrescription(editDraft.id, { ...editDraft, updatedBy: adminName, updatedByRole: "Administrator" });
-      setPrescriptions(prev => prev.map(rx => rx.id === saved.id ? saved : rx));
-      setEditingRxId(null); setEditDraft(null);
+      const saved = creatingPatientId
+        ? await createPrescription(editDraft.patientId, editDraft)
+        : await updatePrescription(editDraft.id, { ...editDraft, updatedBy: adminName, updatedByRole: "Administrator" });
+      setPrescriptions(prev => creatingPatientId
+        ? [...prev.filter(rx => rx.patientId !== saved.patientId), saved]
+        : prev.map(rx => rx.id === saved.id ? saved : rx));
+      setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null);
     } catch (error) { setSaveError(error instanceof Error ? error.message : "Prescription could not be saved."); }
   };
 
@@ -2899,7 +3000,11 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
           const todaySess = sessions.find(s => s.patientId === p.id && s.date === "Today") ?? null;
           const isExpanded = expandedId === p.id;
           const isEditing  = rx !== null && editingRxId === rx.id;
-          const draft      = isEditing ? editDraft : null;
+          const isCreating = creatingPatientId === p.id;
+          const draft      = (isEditing || isCreating) ? editDraft : null;
+          const medicalInfo = p.medicalInfo || {};
+          const investigations = p.investigations || {};
+          const registration = p.registrationFields || {};
 
           return (
             <div key={p.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${isExpanded ? "border-violet-200 shadow-md" : "border-slate-100"}`}>
@@ -2907,7 +3012,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
               {/* ── Card header (always visible) ── */}
               <button
                 className="w-full text-left p-5 hover:bg-slate-50/60 transition-colors"
-                onClick={() => { if (isEditing) return; setExpandedId(isExpanded ? null : p.id); }}
+                onClick={() => { if (isEditing || isCreating) return; setExpandedId(isExpanded ? null : p.id); }}
               >
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-3">
@@ -2932,7 +3037,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {!isEditing && (isExpanded
+                    {!isEditing && !isCreating && (isExpanded
                       ? <ChevronUp className="w-5 h-5 text-slate-400" />
                       : <ChevronDown className="w-5 h-5 text-slate-400" />
                     )}
@@ -2941,7 +3046,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
               </button>
 
               {/* ── Expanded body ── */}
-              {(isExpanded || isEditing) && (
+              {(isExpanded || isEditing || isCreating) && (
                 <div className="border-t border-slate-100">
 
                   {/* ══ SECTION 1: Patient Information ══ */}
@@ -2954,6 +3059,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         { label: "Patient Name",    value: p.name },
                         { label: "UHID",            value: p.uhid },
                         { label: "Age / Gender",    value: `${p.age} yrs · ${p.gender}` },
+                          { label: "Date of Birth",   value: firstDetailValue(p.dateOfBirth, recordValue(registration, "dateOfBirth", "dob")) },
                         { label: "Blood Group",     value: p.bloodGroup },
                         { label: "Unit",            value: todaySess ? (todaySess.unit === "U1" ? "Unit 1" : "Unit 2") : "—" },
                         { label: "Machine",         value: todaySess ? todaySess.machine : "—" },
@@ -2978,12 +3084,110 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                     )}
                   </div>
 
+                  {/* ══ SECTION 2: Medical Information ══ */}
+                  <div className="px-5 pb-4 border-t border-slate-100">
+                    <h3 className="pt-4 text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <FlaskConical className="w-3.5 h-3.5 text-violet-500" /> Medical Information
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {[
+                        { label: "Comorbidities", value: firstDetailValue(p.comorbidities, recordValue(medicalInfo, "comorbidities")) },
+                        { label: "Hypertension", value: firstDetailValue(recordValue(medicalInfo, "hypertension", "htn"), p.comorbidities.toLowerCase().includes("hypertension") ? "Yes" : undefined) },
+                        { label: "Diabetes", value: firstDetailValue(recordValue(medicalInfo, "diabetes", "dm"), p.comorbidities.toLowerCase().includes("diabetes") ? "Yes" : undefined) },
+                        { label: "Dialysis Access", value: firstDetailValue(recordValue(medicalInfo, "dialysisAccess", "access", "accessType"), recordValue(registration, "dialysisAccess", "accessType")) },
+                        { label: "AV Fistula", value: firstDetailValue(recordValue(medicalInfo, "avFistula", "avf")) },
+                        { label: "Permacath", value: firstDetailValue(recordValue(medicalInfo, "permacath", "tunnelledCatheter")) },
+                        { label: "Temporary Catheter", value: firstDetailValue(recordValue(medicalInfo, "temporaryCatheter", "tempCatheter")) },
+                        { label: "Other Access", value: firstDetailValue(recordValue(medicalInfo, "otherAccess")) },
+                        { label: "CBC", value: firstDetailValue(recordValue(investigations, "cbc", "CBC"), recordValue(medicalInfo, "cbc", "CBC")) },
+                        { label: "Renal Function Test", value: firstDetailValue(recordValue(investigations, "rft", "renalFunctionTest", "RFT")) },
+                        { label: "LFT", value: firstDetailValue(recordValue(investigations, "lft", "LFT")) },
+                        { label: "HBsAg", value: p.viralStatus.hepatitisB },
+                        { label: "HIV", value: p.viralStatus.hiv },
+                        { label: "Hepatitis C", value: p.viralStatus.hepatitisC },
+                        { label: "Serum Calcium", value: firstDetailValue(recordValue(investigations, "serumCalcium", "calcium")) },
+                        { label: "Serum Phosphorous", value: firstDetailValue(recordValue(investigations, "serumPhosphorous", "phosphorous", "phosphorus")) },
+                        { label: "Serum Ferritin", value: firstDetailValue(recordValue(investigations, "serumFerritin", "ferritin")) },
+                        { label: "Thyroid Profile", value: firstDetailValue(recordValue(investigations, "thyroidProfile", "thyroid")) },
+                        { label: "2D Echo", value: firstDetailValue(recordValue(investigations, "twoDEcho", "echo2d", "echo")) },
+                        { label: "Ejection Fraction", value: firstDetailValue(recordValue(investigations, "ejectionFraction", "ef")) },
+                        { label: "OPD / IPD", value: firstDetailValue(recordValue(medicalInfo, "opdIpd", "opd_ipd"), recordValue(registration, "opdIpd", "opd_ipd")) },
+                      ].map(item => (
+                        <div key={item.label} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">{item.label}</p>
+                          <p className="text-xs font-semibold text-slate-700 leading-snug">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* ══ SECTION 2 & 3: Prescription (view or edit) ══ */}
-                  {rx === null ? (
+                  {isCreating && draft ? (
+                    /* ── Create mode ── */
+                    <div className="px-5 pb-5 border-t border-slate-100 bg-violet-50/30">
+                      <div className="pt-4 mb-4 flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="text-xs font-bold text-violet-700 uppercase tracking-widest flex items-center gap-2">
+                          <Plus className="w-3.5 h-3.5" /> Create Prescription
+                        </h3>
+                        <span className="text-[10px] text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200">A versioned record will be created</span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Diagnosis</label>
+                          <input value={draft.diagnosis} onChange={e => setEditDraft(d => d ? { ...d, diagnosis: e.target.value } : d)} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Weekly Dialysis Sessions</label>
+                          <select value={draft.dialysisRx.weeklySessionsCount} onChange={e => updateRxScalar("weeklySessionsCount", e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white">
+                            {WEEKLY_SESSION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Dialysis Days</p>
+                      <div className="flex flex-wrap gap-1.5 p-2 border border-slate-200 rounded-xl bg-white mb-3">
+                        {DIALYSIS_DAY_OPTIONS.map(day => <button key={day} type="button" onClick={() => toggleEditDay(day)} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${draft.dialysisRx.dialysisDays.includes(day) ? "bg-violet-600 text-white border-violet-600" : "bg-slate-50 text-slate-600 border-slate-200"}`}>{day.slice(0, 3)}</button>)}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                        <select value={draft.dialysisRx.slot} onChange={e => updateRxScalar("slot", e.target.value)} className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"><option value="">Select slot</option>{SLOT_OPTIONS.map(o => <option key={o}>{o}</option>)}</select>
+                        <select value={draft.dialysisRx.duration} onChange={e => updateRxScalar("duration", e.target.value)} className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white">{DURATION_OPTIONS.map(o => <option key={o}>{o}</option>)}</select>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+                        {ADMIN_RX_SCALAR_FIELDS.filter(field => !["weeklySessionsCount", "slot", "duration"].includes(field.key)).map(({ key, label }) => (
+                          <div key={key}>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{label}</label>
+                            <input value={draft.dialysisRx[key]} onChange={e => updateRxScalar(key, e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white" />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mb-5">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Medication Prescription</p>
+                          <button onClick={addMedRow} className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-800 font-semibold"><Plus className="w-3.5 h-3.5" /> Add Row</button>
+                        </div>
+                        {draft.medications.length === 0 ? (
+                          <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-400">No medications added.</p>
+                        ) : (
+                          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                            <table className="w-full text-xs"><thead><tr className="bg-slate-50 text-slate-500"><th className="text-left px-2 py-2">Medication</th><th className="text-left px-2 py-2">Dose</th><th className="text-left px-2 py-2">Frequency</th><th className="text-left px-2 py-2">Route</th><th /></tr></thead>
+                              <tbody>{draft.medications.map((med, index) => <tr key={index} className="border-t border-slate-50"><td className="p-1"><input value={med.name} onChange={e => updateMed(index, "name", e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1" /></td><td className="p-1"><input value={med.dose} onChange={e => updateMed(index, "dose", e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1" /></td><td className="p-1"><input value={med.frequency} onChange={e => updateMed(index, "frequency", e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1" /></td><td className="p-1"><select value={med.route} onChange={e => updateMed(index, "route", e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1 bg-white"><option>PO</option><option>IV</option><option>SC</option><option>IM</option></select></td><td className="p-1"><button onClick={() => removeMedRow(index)} className="p-1 text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button></td></tr>)}</tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                      <textarea value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)} placeholder="Clinical notes (optional)" rows={3} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none mb-4" />
+                      <div className="flex gap-3 justify-end">
+                        <button onClick={cancelEdit} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-white text-sm font-semibold">Cancel</button>
+                        <button onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold"><Check className="w-4 h-4" /> Create Prescription</button>
+                      </div>
+                      {saveError && <p className="mt-2 text-xs text-red-600 text-right">{saveError}</p>}
+                    </div>
+                  ) : rx === null ? (
                     <div className="mx-5 mb-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl p-5 text-center">
                       <FileText className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                      <p className="text-sm text-slate-400 font-medium">No prescription on file</p>
-                      <p className="text-xs text-slate-300 mt-0.5">A prescription has not been created for this patient yet.</p>
+                      <p className="text-sm text-slate-500 font-medium">No dialysis prescription created yet.</p>
+                      <button onClick={() => startCreate(p)} className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-bold hover:bg-violet-700">
+                        <Plus className="w-3.5 h-3.5" /> Create Prescription
+                      </button>
                     </div>
                   ) : isEditing && draft ? (
                     /* ── Edit mode ── */
@@ -3109,9 +3313,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                           </h3>
                           <div className="flex items-center gap-2">
                             <RxStatusBadge status={rx.status} />
-                            {rx.history.length > 0 && (
-                              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold border border-slate-200">v{rx.history.length + 1}</span>
-                            )}
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold border border-slate-200">v{rx.version ?? rx.history.length + 1}</span>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -3180,7 +3382,15 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         </div>
                         <div className="mt-3 pt-3 border-t border-slate-100 space-y-0.5">
                           <p className="text-xs text-slate-500">
-                            <span className="font-semibold text-slate-600">Last Updated:</span>{" "}
+                            <span className="font-semibold text-slate-600">Created By:</span>{" "}
+                            {rx.createdBy || rx.updatedBy} <span className="text-slate-400">({rx.createdByRole || rx.updatedByRole})</span>
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            <span className="font-semibold text-slate-600">Created:</span>{" "}
+                            {rx.createdAt ? formatRxTimestamp(rx.createdAt) : rx.issuedDate}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            <span className="font-semibold text-slate-600">Last Edited:</span>{" "}
                             {rx.lastUpdatedAt ? formatRxTimestamp(rx.lastUpdatedAt) : rx.issuedDate}
                           </p>
                           <p className="text-xs text-slate-500">
@@ -3188,6 +3398,28 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                             {rx.updatedBy} <span className="text-slate-400">({rx.updatedByRole})</span>
                           </p>
                         </div>
+                      </div>
+
+                      {/* Prescription audit trail */}
+                      <div className="px-5 pb-4 border-t border-slate-100">
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 mt-4 flex items-center gap-2">
+                          <ScrollText className="w-3.5 h-3.5 text-violet-500" /> Prescription History
+                        </h3>
+                        {rx.history.length === 0 ? (
+                          <p className="text-xs text-slate-400 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5">No previous versions. This is the current prescription.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {rx.history.map(item => (
+                              <div key={item.version} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-700">Version {item.version} · {item.version === 1 ? "Created" : "Edited"}</p>
+                                  <p className="text-[11px] text-slate-500">{item.updatedBy} <span className="text-slate-400">({item.updatedByRole})</span> · {item.updatedAt ? formatRxTimestamp(item.updatedAt) : item.updatedDate}</p>
+                                </div>
+                                <span className="text-[10px] font-semibold text-slate-500">{item.changedFields.length ? item.changedFields.join(", ") : "Snapshot archived"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
@@ -3198,12 +3430,17 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                       <Stethoscope className="w-3.5 h-3.5 text-slate-400" /> Treatment Actions
                     </h3>
                     <div className="flex flex-wrap gap-2">
-                      {rx && !isEditing && (
+                       {rx && !isEditing && !isCreating && (
                         <button onClick={() => startEdit(rx)}
                           className="flex items-center gap-1.5 px-4 py-2 border border-violet-200 text-violet-700 bg-white rounded-xl hover:bg-violet-50 text-xs font-semibold shadow-sm transition-colors">
                           <Edit3 className="w-3.5 h-3.5" /> Edit Prescription
                         </button>
                       )}
+                       {!rx && !isCreating && (
+                         <button onClick={() => startCreate(p)} className="flex items-center gap-1.5 px-4 py-2 border border-violet-200 text-violet-700 bg-white rounded-xl hover:bg-violet-50 text-xs font-semibold shadow-sm transition-colors">
+                           <Plus className="w-3.5 h-3.5" /> Create Prescription
+                         </button>
+                       )}
                       {todaySess ? (
                         <>
                           {todaySess.status === "Waiting" && (
@@ -5062,6 +5299,7 @@ export default function AdminApp({
   const [activeSectionLabel, setActiveSectionLabel] = useState("Dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [prefillMachine, setPrefillMachine] = useState<Machine | null>(null);
+  const [prefillPatientId, setPrefillPatientId] = useState<string | null>(null);
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -5113,10 +5351,11 @@ export default function AdminApp({
     );
   }
 
-  const navigate = (section: NavSection, label: string, opts?: { machine?: Machine }) => {
+  const navigate = (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => {
     setActiveSection(section);
     setActiveSectionLabel(label);
     setPrefillMachine(opts?.machine ?? null);
+    setPrefillPatientId(opts?.patientId ?? null);
     setSidebarOpen(false);
   };
 
@@ -5141,7 +5380,7 @@ export default function AdminApp({
       case "dashboard":
         return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate} />;
       case "assign-patient":
-        return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions} onAssigned={handleAssigned} prefillMachine={prefillMachine} />;
+        return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions} onAssigned={handleAssigned} prefillMachine={prefillMachine} prefillPatientId={prefillPatientId} />;
       case "live-schedule":
         return (
           <LiveScheduleSection
