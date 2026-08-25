@@ -1,4 +1,4 @@
-import type { AdminPrescription, DialysisSession, Machine, Patient } from "../AdminApp";
+import type { AdminPrescription, DialysisSession, Machine, Patient, RxDialysis, RxMedication } from "../AdminApp";
 
 export interface StaffAnalytics {
   patients: number;
@@ -87,11 +87,40 @@ const asSession = (s: Record<string, unknown>): DialysisSession => {
     missedReasonOther: typeof s.missedReasonOther === "string" ? s.missedReasonOther : undefined };
 };
 
+const asText = (value: unknown) => typeof value === "string" ? value : "";
+
+function asDialysisRx(value: unknown): RxDialysis {
+  const rx = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return {
+    weeklySessionsCount: asText(rx.weeklySessionsCount),
+    dialysisDays: Array.isArray(rx.dialysisDays) ? rx.dialysisDays.filter((day): day is string => typeof day === "string") : [],
+    slot: asText(rx.slot),
+    duration: asText(rx.duration),
+    bloodFlow: asText(rx.bloodFlow),
+    dialysateFlow: asText(rx.dialysateFlow),
+    membrane: asText(rx.membrane),
+    dryWeight: asText(rx.dryWeight),
+    anticoagulation: asText(rx.anticoagulation),
+  };
+}
+
+function asMedications(value: unknown): RxMedication[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((med): med is Record<string, unknown> => Boolean(med) && typeof med === "object" && !Array.isArray(med))
+    .map(med => ({
+      name: asText(med.name),
+      dose: asText(med.dose),
+      frequency: asText(med.frequency),
+      route: asText(med.route),
+    }));
+}
+
 const asPrescription = (p: Record<string, any>): AdminPrescription => ({
   id: p.id, patientId: p.patientId, patientName: p.patientName || "", patientUhid: p.patientUhid || "",
   diagnosis: p.diagnosis || "", status: p.status || "Active", issuedDate: p.createdAt || "", updatedBy: p.updatedBy || "Staff",
-  updatedByRole: "Doctor", lastUpdatedAt: p.updatedAt, dialysisRx: p.dialysisRx || {},
-  medications: p.medications || [], notes: p.notes || "", history: [],
+  updatedByRole: "Doctor", lastUpdatedAt: p.updatedAt, dialysisRx: asDialysisRx(p.dialysisRx),
+  medications: asMedications(p.medications), notes: p.notes || "", history: [],
 }) as AdminPrescription;
 
 const asHistory = (row: Record<string, any>): AdminPrescription["history"][number] => {
@@ -99,7 +128,7 @@ const asHistory = (row: Record<string, any>): AdminPrescription["history"][numbe
   return {
     version: row.version, updatedDate: row.created_at || "", updatedAt: row.created_at,
     updatedBy: "Staff", updatedByRole: "Doctor", changedFields: [],
-    dialysisRx: snapshot.dialysisRx || {}, medications: snapshot.medications || [],
+    dialysisRx: asDialysisRx(snapshot.dialysisRx), medications: asMedications(snapshot.medications),
     notes: snapshot.notes || "", status: snapshot.status || "Active",
   } as AdminPrescription["history"][number];
 };

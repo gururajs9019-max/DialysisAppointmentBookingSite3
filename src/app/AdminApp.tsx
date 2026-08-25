@@ -4,6 +4,7 @@ import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import type { Appointment } from "./components/AppointmentCard";
 import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
 import { logoutStaff } from "./lib/appointmentApi";
+import { persistQuickAssignment } from "./lib/quickAssignment.mjs";
 import { createMachine, createPatient, createSession, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
@@ -1875,9 +1876,15 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
       )}
       {quickAssignMachine && (
         <QuickAssignModal machine={quickAssignMachine} patients={patients} sessions={sessions}
-          onAssigned={(session, machineId) => {
-            onAssigned(session, machineId);
-            setMachines(prev => prev.map(m => m.id === machineId ? { ...m, status: "scheduled", nextPatient: session.patientName } : m));
+          onAssigned={async (session, machineId) => {
+            await persistQuickAssignment(
+              onAssigned,
+              (assignedMachineId, patientName) => setMachines(prev => prev.map(m =>
+                m.id === assignedMachineId ? { ...m, status: "scheduled", nextPatient: patientName } : m
+              )),
+              session,
+              machineId,
+            );
           }}
           onClose={() => setQuickAssignMachine(null)} />
       )}
