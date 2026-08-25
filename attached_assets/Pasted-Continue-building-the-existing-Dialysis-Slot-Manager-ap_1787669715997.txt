@@ -1,0 +1,803 @@
+Continue building the existing Dialysis Slot Manager application.
+
+IMPORTANT:
+The frontend UI has already been built based on the Figma design, and login/authentication has already been implemented.
+
+DO NOT redesign, regenerate, replace, or modify the existing UI.
+
+CRITICAL RESTRICTION:
+DO NOT TOUCH THE PATIENT PORTAL IN ANY WAY.
+
+The Patient Portal frontend, routes, components, styling, layout, forms, workflows, and existing functionality must remain exactly as they are.
+
+Your task is to inspect the existing project structure and Figma-generated frontend and build the backend/database/API architecture around the existing application.
+
+==================================================
+1. FIRST INSPECT THE EXISTING PROJECT
+==================================================
+
+Before making changes:
+
+- Inspect the complete existing codebase.
+- Identify the frontend framework and architecture.
+- Identify all existing routes/pages/components.
+- Identify the existing authentication implementation.
+- Identify how administrator and doctor portals are currently structured.
+- Identify existing mock data, local state, static data, or placeholder APIs.
+- Identify existing forms and fields.
+- Identify existing navigation and role-based access.
+- Identify the existing database setup, if any.
+- Identify which functionality is currently frontend-only.
+
+Do not immediately rewrite anything.
+
+Create the backend architecture based on what already exists.
+
+==================================================
+2. PATIENT PORTAL PROTECTION
+==================================================
+
+The Patient Portal is OUT OF SCOPE.
+
+Do not:
+
+- Modify Patient Portal UI
+- Modify Patient Portal routes
+- Modify Patient Portal components
+- Modify Patient Portal forms
+- Modify Patient Portal styling
+- Modify Patient Portal workflows
+- Remove any Patient Portal functionality
+- Rename Patient Portal fields
+- Change Patient Portal API behavior unless absolutely required for authentication compatibility
+
+If a shared backend model/API is required by the Patient Portal, preserve its existing behavior.
+
+The backend can support shared data, but the Patient Portal frontend must not be changed.
+
+==================================================
+3. BACKEND ARCHITECTURE
+==================================================
+
+Build a proper production-ready backend for the Administrator and Doctor portals.
+
+Use the existing technology stack where possible.
+
+If there is no backend framework already established, choose a simple maintainable architecture compatible with the existing frontend.
+
+Create clear separation between:
+
+- Authentication
+- Users
+- Roles
+- Patients
+- Doctors
+- Administrators
+- Machines
+- Units
+- Dialysis schedules
+- Dialysis sessions
+- Prescriptions
+- Medications
+- Clinical notes
+- Medical information
+- Investigations
+- Viral status
+- Missed slots
+- Patient outcomes
+- Notifications
+- Analytics
+- Audit/history
+
+==================================================
+4. DATABASE
+==================================================
+
+Create a relational database structure suitable for a dialysis management system.
+
+Do NOT store important application data only in frontend state or localStorage.
+
+Create appropriate tables/models for:
+
+USERS
+- id
+- name
+- email
+- phone
+- password/auth reference if required
+- role
+- status
+- createdAt
+- updatedAt
+
+ROLES
+- Administrator
+- Doctor
+- Patient
+
+PATIENTS
+Include the existing patient registration information from the frontend.
+
+Include fields such as:
+
+- patient ID
+- name
+- date of birth
+- gender if already present
+- address/place
+- blood group
+- kidney disease
+- Native Kidney Disease
+- biopsy status
+- other disease information
+- registration status
+- patient status
+- transplant status
+- screening status
+- createdAt
+- updatedAt
+
+MEDICAL INFORMATION
+
+Support the existing Medical Information structure including:
+
+- Comorbidities
+  - Hypertension
+  - Diabetes
+
+- Access
+  - AVF
+  - Permacath
+  - Temp Catheter
+
+- Basic Investigation
+  - CBC
+    - Hb
+    - TLC
+    - PLT
+    - MCV
+  - Serum Ferritin
+  - Serum Calcium
+  - Thyroid Profile
+    - T3
+    - T4
+    - TSH
+  - 2D Echo
+  - EF percentage
+  - Serum Phosphorous
+  - Renal Function Test
+    - Urea
+    - Serum Creatinine
+
+- OPD/IPD
+
+Preserve the exact field names and structure already used by the frontend wherever possible.
+
+==================================================
+5. VIRAL STATUS
+==================================================
+
+Create proper database support for viral status.
+
+Support at minimum:
+
+- Hepatitis B / HBsAg
+- Hepatitis C / HCV
+- HIV
+
+The system should support the machine segregation requirements already present in the frontend.
+
+Do not hard-code viral status only into UI.
+
+==================================================
+6. UNITS AND MACHINES
+==================================================
+
+Create database models for Units and Machines.
+
+Current units:
+
+UNIT 1
+- 29 machines
+- 1 RVD [HIV]
+- 1 HBsAg
+- 5 HCV
+- 22 Negative
+
+UNIT 2
+- 7 machines
+- 5 Negative
+- 1 HCV
+- 1 HIV
+
+Machines must have:
+
+- machine ID
+- machine name/number
+- unit
+- infection/viral category
+- status
+- maintenance status
+- active/inactive
+- createdAt
+- updatedAt
+
+Machine statuses should support:
+
+- Available
+- Occupied
+- Maintenance
+- Disabled
+
+IMPORTANT:
+Administrators must be able to add new machines and increase the number of machines in the future.
+
+Do NOT hard-code the machine list into frontend-only logic.
+
+==================================================
+7. DIALYSIS SCHEDULING
+==================================================
+
+Create backend support for dialysis scheduling.
+
+Current dialysis slots are:
+
+- 8:00 AM – 12:00 PM
+- 12:00 PM – 4:00 PM
+- 4:00 PM – 8:00 PM
+
+A schedule should connect:
+
+Patient
+→ Unit
+→ Machine
+→ Date
+→ Time slot
+→ Doctor
+→ Dialysis prescription
+→ Session status
+
+Prevent double booking of:
+
+- Same machine
+- Same time slot
+- Same patient
+
+Support future scheduling.
+
+==================================================
+8. PATIENT → MACHINE ASSIGNMENT
+==================================================
+
+Administrator should be able to assign a registered patient to:
+
+- Unit 1 or Unit 2
+- Specific eligible machine
+- Specific dialysis slot
+- Specific date
+
+The backend must validate machine eligibility based on viral/infection status and machine category.
+
+Do not rely only on frontend validation.
+
+==================================================
+9. MISSED SLOTS
+==================================================
+
+Create backend support for missed dialysis slots.
+
+Reasons should include:
+
+- Went to another dialysis center
+- Expired
+- Other
+
+If "Other" is selected, save the custom reason entered by the administrator.
+
+The system should allow an administrator to fill/reassign a released slot where appropriate.
+
+Maintain history of the original missed slot.
+
+==================================================
+10. PATIENT STATUS / TRANSPLANT
+==================================================
+
+Support patient lifecycle statuses such as:
+
+- Active
+- Temporarily inactive
+- Transplanted
+- Expired
+- Transferred
+- Screening ended
+
+If a patient is transplanted:
+
+- Preserve all historical records.
+- End future screening/scheduling as appropriate.
+- Do not delete patient history.
+
+==================================================
+11. DIALYSIS PRESCRIPTION
+==================================================
+
+Create a proper prescription model.
+
+Prescription should support:
+
+FREQUENCY:
+First field:
+- 1 session/week
+- 2 sessions/week
+- 3 sessions/week
+- 4 sessions/week
+- 5 sessions/week
+- 6 sessions/week
+- 7 sessions/week
+
+Second field:
+- Day(s) of dialysis
+
+SLOT:
+- 8 AM – 12 PM
+- 12 PM – 4 PM
+- 4 PM – 8 PM
+
+DURATION:
+- 2 hr
+- 3 hr
+- 4 hr
+- 5 hr
+
+Also support the existing dialysis prescription fields already present in the frontend.
+
+==================================================
+12. MEDICATION PRESCRIPTION
+==================================================
+
+Create a medication prescription structure with:
+
+- Medication
+- Dose
+- Frequency
+- Route
+
+A patient can have multiple medications.
+
+Maintain medication prescription history.
+
+==================================================
+13. PRESCRIPTION EDITING AND HISTORY
+==================================================
+
+Both Administrator and Doctor should be able to edit prescriptions according to their permissions.
+
+Whenever a prescription is changed:
+
+Save:
+
+- Previous prescription
+- Updated prescription
+- Changed by
+- Role
+- Date
+- Time
+
+For example:
+
+"Edited by Dr. X — Doctor — 25 Aug 2026, 10:30 AM"
+
+or
+
+"Edited by Admin — Administrator — 25 Aug 2026, 10:30 AM"
+
+Do not overwrite history.
+
+Create a prescription version/history model.
+
+==================================================
+14. DOCTOR ↔ ADMIN DATA SYNCHRONIZATION
+==================================================
+
+Information entered by Administrator that is relevant to the Doctor Portal must be available to doctors.
+
+This includes:
+
+- Patient information
+- Medical information
+- Clinical investigations
+- Viral status
+- Dialysis history
+- Dialysis schedule
+- Machine assignment
+- Dialysis prescription
+- Medication prescription
+- Patient outcomes
+- Clinical notes where appropriate
+
+When a Doctor changes a prescription:
+
+1. Save the new prescription.
+2. Preserve the previous version.
+3. Record that the Doctor made the change.
+4. Update the shared prescription.
+5. Make the updated prescription visible in the Administrator Portal.
+6. Create a notification for the Administrator.
+
+When an Administrator changes a prescription:
+
+1. Save the new prescription.
+2. Preserve the previous version.
+3. Record that the Administrator made the change.
+4. Update the shared prescription.
+5. Notify the Doctor where appropriate.
+
+==================================================
+15. NOTIFICATIONS
+==================================================
+
+Create a backend notification system.
+
+Examples:
+
+- Doctor updated prescription
+- Administrator updated prescription
+- Machine placed under maintenance
+- Machine returned to service
+- Missed slot recorded
+- Patient status changed
+- New clinical information added
+
+Notifications should contain:
+
+- recipient
+- type
+- title
+- message
+- related patient
+- related record
+- read/unread status
+- createdAt
+
+==================================================
+16. CLINICAL NOTES
+==================================================
+
+Create backend support for Doctor clinical notes.
+
+A clinical note should contain:
+
+- Patient
+- Doctor
+- note
+- date/time
+- createdAt
+- updatedAt
+
+The patient selection/search should eventually use backend patient data.
+
+Preserve the existing Doctor Portal UI.
+
+==================================================
+17. DIALYSIS SESSION HISTORY
+==================================================
+
+Store every dialysis session.
+
+Each session should support:
+
+- patient
+- date
+- unit
+- machine
+- slot
+- doctor
+- status
+- vitals
+- complications
+- treatment status
+- notes
+- start/end time where applicable
+
+Complication options should include the existing frontend options plus:
+
+- Death
+
+Do not delete completed sessions.
+
+==================================================
+18. LIVE SCHEDULE
+==================================================
+
+The backend should provide data for the existing Live Schedule page.
+
+Support statuses such as:
+
+- Waiting
+- Called
+- In treatment
+- Completed
+- Missed
+- Cancelled
+
+Waiting patients should be able to have vitals recorded.
+
+Do not redesign the page.
+
+==================================================
+19. ANALYTICS DATA
+==================================================
+
+Prepare backend queries/API endpoints for the analytics already designed in the frontend.
+
+Analytics categories include:
+
+1. Clinical Investigation
+2. Viral Status
+3. Prescription Analytics
+4. Dialysis Analytics
+5. Patient Outcomes
+6. Machine Utilization
+7. Missed Slots
+8. Basic Investigation
+9. Comorbidities
+10. LFT
+11. Access
+
+For investigation analytics, support dropdown filtering such as:
+
+- All Clinical Investigations
+- Specific investigation
+
+For the additional analytics:
+
+- All Comorbidities
+- All LFT
+- Access
+
+The frontend already contains the desired analytical structure.
+
+Build APIs that provide real database data to those existing analytics components.
+
+Do not redesign the analytics UI.
+
+==================================================
+20. AUDIT LOG
+==================================================
+
+Because this is a healthcare management system, maintain an audit trail for important changes.
+
+Record:
+
+- who performed the action
+- role
+- action
+- affected record
+- previous value where appropriate
+- new value where appropriate
+- timestamp
+
+Important actions include:
+
+- Patient registration/update
+- Prescription changes
+- Machine changes
+- Schedule changes
+- Patient status changes
+- Clinical note changes
+- Medical information changes
+
+==================================================
+21. ROLE-BASED ACCESS CONTROL
+==================================================
+
+Maintain the existing login authentication.
+
+Use the authenticated user's role to control backend access.
+
+Administrator:
+- Full administrative access
+
+Doctor:
+- Access to relevant patient clinical information
+- View dialysis history
+- View prescriptions
+- Edit prescriptions according to existing requirements
+- Add/update clinical notes
+- View relevant analytics
+
+Patient:
+- DO NOT MODIFY THE PATIENT PORTAL.
+- Do not add new Patient Portal functionality unless required for compatibility with the existing authentication.
+
+Backend authorization must be enforced server-side, not only through frontend route protection.
+
+==================================================
+22. API DESIGN
+==================================================
+
+Create clean REST APIs or follow the existing API architecture.
+
+Examples:
+
+/api/auth
+/api/patients
+/api/patients/:id
+/api/patients/:id/medical-information
+/api/patients/:id/dialysis-history
+/api/patients/:id/prescriptions
+/api/patients/:id/prescription-history
+/api/patients/:id/clinical-notes
+/api/machines
+/api/units
+/api/schedules
+/api/dialysis-sessions
+/api/missed-slots
+/api/notifications
+/api/analytics
+/api/audit-logs
+
+Use the existing frontend API conventions if already present.
+
+==================================================
+23. DATABASE INTEGRITY
+==================================================
+
+Implement proper relationships and constraints.
+
+Examples:
+
+- Patient IDs must be unique.
+- Machine IDs must be unique.
+- A machine cannot be assigned to two patients in the same slot.
+- A patient cannot have conflicting dialysis schedules.
+- Prescription history must never be lost.
+- Deactivated patients should retain historical data.
+- Deactivated machines should retain historical sessions.
+- Deleted/disabled records should not break historical reports.
+
+Use transactions for important multi-step operations such as scheduling and prescription updates.
+
+==================================================
+24. FRONTEND INTEGRATION
+==================================================
+
+After creating the backend:
+
+Connect the existing Administrator and Doctor Portal frontend components to the backend.
+
+Replace mock/static data only where necessary.
+
+IMPORTANT:
+
+Do NOT redesign components.
+
+Do NOT change:
+
+- colors
+- typography
+- spacing
+- cards
+- layouts
+- navigation
+- page structure
+- existing Figma design
+
+Only make the minimum code changes required to connect existing UI components to real backend APIs.
+
+==================================================
+25. PATIENT PORTAL SAFETY CHECK
+==================================================
+
+Before completing the work:
+
+Verify that the Patient Portal has not been changed.
+
+Check:
+
+- Patient Portal routes
+- Patient Portal components
+- Patient Portal styling
+- Patient Portal forms
+- Patient Portal functionality
+
+If any backend changes require Patient Portal compatibility, preserve the existing behavior.
+
+==================================================
+26. SEED DATA
+==================================================
+
+Create development seed data for:
+
+- Administrator
+- Doctor
+- Sample patients
+- Unit 1
+- Unit 2
+- Current machines
+- Sample dialysis schedules
+- Sample prescriptions
+- Sample dialysis sessions
+- Sample clinical notes
+- Sample notifications
+
+Use clearly identifiable demo data.
+
+Do not use real patient information.
+
+==================================================
+27. VALIDATION AND TESTING
+==================================================
+
+After implementation:
+
+- Run the application.
+- Run database migrations.
+- Test authentication.
+- Test Administrator APIs.
+- Test Doctor APIs.
+- Test patient registration.
+- Test machine assignment.
+- Test scheduling.
+- Test prescription editing.
+- Test prescription history.
+- Test Doctor → Administrator synchronization.
+- Test Administrator → Doctor synchronization.
+- Test notifications.
+- Test missed slots.
+- Test machine maintenance.
+- Test analytics APIs.
+- Test role-based permissions.
+
+Also verify that the Patient Portal still works exactly as before.
+
+==================================================
+28. IMPORTANT DEVELOPMENT RULE
+==================================================
+
+DO NOT rebuild the application from scratch.
+
+DO NOT replace the existing frontend.
+
+DO NOT create a new UI.
+
+DO NOT modify the Figma-generated design.
+
+DO NOT touch the Patient Portal.
+
+Instead:
+
+EXISTING FRONTEND
+        ↓
+Existing Administrator Portal
+Existing Doctor Portal
+Existing Patient Portal (LOCKED)
+        ↓
+Backend API
+        ↓
+Authentication / Authorization
+        ↓
+Database
+        ↓
+Shared healthcare data
+        ↓
+Administrator ↔ Doctor synchronization
+
+The primary goal is to turn the existing Administrator and Doctor frontend into a functional full-stack application while preserving the current Figma UI exactly.
+
+Before making any destructive change, inspect the existing implementation and prefer extending it over replacing it.
+
+At the end, provide a concise report containing:
+
+1. Backend technology used
+2. Database used
+3. Tables/models created
+4. APIs created
+5. Authentication/authorization implementation
+6. Administrator features connected
+7. Doctor features connected
+8. Patient Portal confirmation that it was NOT modified
+9. Any frontend files changed
+10. Any remaining TODOs or limitations
+11. How to run the application
+12. How to run database migrations/seeding
