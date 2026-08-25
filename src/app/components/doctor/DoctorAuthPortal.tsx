@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Stethoscope, Mail, Lock, User, Building, ClipboardCheck, Eye, EyeOff, ArrowLeft } from "lucide-react";
 import { ImageWithFallback } from "../figma/ImageWithFallback";
+import { loginStaff } from "../../lib/appointmentApi";
 
 export interface DoctorData {
   name: string;
@@ -11,13 +12,15 @@ export interface DoctorData {
 }
 
 interface DoctorAuthPortalProps {
-  onAuthenticate: (doctorData: DoctorData) => void;
+  onAuthenticate: (doctorData: DoctorData) => Promise<void> | void;
   onBack?: () => void;
 }
 
 export function DoctorAuthPortal({ onAuthenticate, onBack }: DoctorAuthPortalProps) {
-  const [isLogin, setIsLogin] = useState(true);
+  const isLogin = true;
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -27,18 +30,24 @@ export function DoctorAuthPortal({ onAuthenticate, onBack }: DoctorAuthPortalPro
     licenseNumber: "",
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    const doctorData: DoctorData = {
-      name: formData.name || "Dr. Rajesh Verma",
-      email: formData.email,
-      specialty: formData.specialty || "Nephrology",
-      department: formData.department || "Dialysis Department",
-      licenseNumber: formData.licenseNumber || "KMC-NEP",
-    };
-    
-    onAuthenticate(doctorData);
+    setError("");
+    setIsLoading(true);
+    try {
+      const user = await loginStaff("doctor", formData.email, formData.password);
+      await onAuthenticate({
+        name: user.name,
+        email: user.email,
+        specialty: "Nephrology",
+        department: "Dialysis Department",
+        licenseNumber: "Verified staff account",
+      });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Unable to sign in. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -145,6 +154,11 @@ export function DoctorAuthPortal({ onAuthenticate, onBack }: DoctorAuthPortalPro
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
             {!isLogin && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -284,23 +298,12 @@ export function DoctorAuthPortal({ onAuthenticate, onBack }: DoctorAuthPortalPro
 
             <button
               type="submit"
-              className="w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all font-medium text-lg shadow-lg hover:shadow-xl"
+              disabled={isLoading}
+              className="w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all font-medium text-lg shadow-lg hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isLogin ? "Login to Portal" : "Create Account"}
+              {isLoading ? "Signing in…" : "Login to Portal"}
             </button>
           </form>
-
-          <div className="mt-6 text-center">
-            <p className="text-gray-600">
-              {isLogin ? "Don't have an account? " : "Already have an account? "}
-              <button
-                onClick={() => setIsLogin(!isLogin)}
-                className="text-blue-600 hover:text-blue-700 font-medium"
-              >
-                {isLogin ? "Register here" : "Login here"}
-              </button>
-            </p>
-          </div>
 
           <div className="mt-8 pt-6 border-t border-gray-200">
             <p className="text-xs text-gray-500 text-center">

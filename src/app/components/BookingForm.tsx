@@ -15,11 +15,13 @@ export interface BookingFormData {
 }
 
 interface BookingFormProps {
-  onSubmit: (data: BookingFormData) => void;
+  onSubmit: (data: BookingFormData) => void | Promise<void>;
   onCancel: () => void;
+  isSubmitting?: boolean;
+  submitError?: string | null;
 }
 
-export function BookingForm({ onSubmit, onCancel }: BookingFormProps) {
+export function BookingForm({ onSubmit, onCancel, isSubmitting = false, submitError }: BookingFormProps) {
   const { register, handleSubmit, formState: { errors } } = useForm<BookingFormData>();
 
   const dialysisTypes = [
@@ -242,6 +244,11 @@ export function BookingForm({ onSubmit, onCancel }: BookingFormProps) {
       </div>
 
       {/* Form Actions */}
+      {submitError && (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <strong>Booking was not saved.</strong> {submitError}
+        </div>
+      )}
       <div className="flex gap-4 justify-end">
         <button
           type="button"
@@ -252,9 +259,10 @@ export function BookingForm({ onSubmit, onCancel }: BookingFormProps) {
         </button>
         <button
           type="submit"
+          disabled={isSubmitting}
           className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
-          Book Appointment
+          {isSubmitting ? "Saving…" : "Book Appointment"}
         </button>
       </div>
     </form>

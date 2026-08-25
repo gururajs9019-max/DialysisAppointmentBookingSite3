@@ -1,6 +1,9 @@
 import React, { useState, useMemo, useRef } from "react";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
+import type { Appointment } from "./components/AppointmentCard";
+import { PersistedAppointmentsPanel } from "./components/PersistedAppointmentsPanel";
+import { logoutStaff } from "./lib/appointmentApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -18,7 +21,7 @@ import {
 type NavSection =
   | "dashboard" | "live-schedule" | "patient-history" | "machines"
   | "viral-status" | "register-patient" | "notifications" | "assign-patient"
-  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics";
+  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics" | "appointments";
 
 type DoctorStatus = "Active" | "Inactive";
 
@@ -5025,11 +5028,25 @@ export default function AdminApp({
   setPrescriptions,
   rxNotifications,
   markRxRead,
+  appointments = [],
+  appointmentsLoading = false,
+  appointmentsError = null,
+  onReloadAppointments = () => undefined,
+  onAppointmentUpdated = () => undefined,
+  onAppointmentCreated = () => undefined,
+  onSessionAuthenticated,
 }: {
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   rxNotifications: RxNotification[];
   markRxRead: (id: string) => void;
+  appointments?: Appointment[];
+  appointmentsLoading?: boolean;
+  appointmentsError?: string | null;
+  onReloadAppointments?: () => void;
+  onAppointmentUpdated?: (appointment: Appointment) => void;
+  onAppointmentCreated?: (appointment: Appointment) => void;
+  onSessionAuthenticated: () => Promise<void>;
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminData | null>(null);
@@ -5047,11 +5064,22 @@ export default function AdminApp({
   const unreadCount = notifications.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
 
   const handleAssigned = (session: DialysisSession, _machineId: string) => setSessions(prev => [session, ...prev]);
+  const handleLogout = async () => {
+    if (window.confirm("Logout?")) {
+      await logoutStaff();
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+    }
+  };
 
   if (!isAuthenticated) {
     return (
       <AdminAuthPortal
-        onAuthenticate={data => { setCurrentUser(data); setIsAuthenticated(true); }}
+        onAuthenticate={async data => {
+          await onSessionAuthenticated();
+          setCurrentUser(data);
+          setIsAuthenticated(true);
+        }}
         onBack={() => window.location.reload()}
       />
     );
@@ -5066,6 +5094,7 @@ export default function AdminApp({
 
   const sidebarLinks: { section: NavSection; label: string; icon: React.ReactNode; highlight?: boolean; group: string }[] = [
     { section: "dashboard",        label: "Dashboard",         icon: <LayoutDashboard className="w-4 h-4" />, group: "main" },
+    { section: "appointments",     label: "Bookings",          icon: <Calendar className="w-4 h-4" />,        group: "main" },
     { section: "assign-patient",   label: "Assign Patient",    icon: <CalendarPlus className="w-4 h-4" />,    group: "main", highlight: true },
     { section: "live-schedule",    label: "Live Schedule",     icon: <Activity className="w-4 h-4" />,        group: "scheduling" },
     { section: "missed-slots",     label: "Missed Slots",      icon: <SkipForward className="w-4 h-4" />,     group: "scheduling" },
@@ -5084,6 +5113,21 @@ export default function AdminApp({
     switch (activeSection) {
       case "dashboard":
         return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate} />;
+      case "appointments":
+        return (
+          <div className="space-y-5 animate-fade-in">
+            <SectionHeader title="Patient Bookings" subtitle="Review and update appointments saved by patients across all portals." />
+            <PersistedAppointmentsPanel
+              appointments={appointments}
+              role="admin"
+              loading={appointmentsLoading}
+              loadError={appointmentsError}
+              onReload={onReloadAppointments}
+              onUpdated={onAppointmentUpdated}
+              onCreated={onAppointmentCreated}
+            />
+          </div>
+        );
       case "assign-patient":
         return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions} onAssigned={handleAssigned} prefillMachine={prefillMachine} />;
       case "live-schedule":
@@ -5190,7 +5234,7 @@ export default function AdminApp({
               <p className="text-white text-xs font-semibold truncate">{currentUser?.name}</p>
               <p className="text-slate-400 text-xs">@{currentUser?.username}</p>
             </div>
-            <button onClick={() => { if (window.confirm("Logout?")) { setIsAuthenticated(false); setCurrentUser(null); } }}
+            <button onClick={handleLogout}
               className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0">
               <LogOut className="w-4 h-4" />
             </button>
@@ -5222,7 +5266,7 @@ export default function AdminApp({
             </button>
             <div className="hidden sm:flex items-center gap-2 ml-1 pl-3 border-l border-slate-200">
               <p className="text-xs font-semibold text-slate-700">{currentUser?.name}</p>
-              <button onClick={() => { if (window.confirm("Logout?")) { setIsAuthenticated(false); setCurrentUser(null); } }}
+              <button onClick={handleLogout}
                 className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                 <LogOut className="w-4 h-4" />
               </button>

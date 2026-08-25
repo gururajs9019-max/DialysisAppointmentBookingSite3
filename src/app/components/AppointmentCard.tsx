@@ -4,7 +4,7 @@ import { BookingFormData } from "./BookingForm";
 export interface Appointment extends BookingFormData {
   id: string;
   status: "upcoming" | "completed" | "cancelled";
-  createdAt: Date;
+  createdAt: Date | string;
   location: string; // Add location to Appointment interface
   patientName?: string; // Optional patient name for admin view
   patientMRN?: string; // Optional MRN for admin view

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Lock, UserCog, Shield, ArrowLeft } from "lucide-react";
 import { ImageWithFallback } from "../figma/ImageWithFallback";
+import { loginStaff } from "../../lib/appointmentApi";
 
 export interface AdminData {
   username: string;
@@ -8,7 +9,7 @@ export interface AdminData {
 }
 
 interface AdminAuthPortalProps {
-  onAuthenticate: (adminData: AdminData) => void;
+  onAuthenticate: (adminData: AdminData) => Promise<void> | void;
   onBack?: () => void;
 }
 
@@ -18,34 +19,18 @@ export function AdminAuthPortal({ onAuthenticate, onBack }: AdminAuthPortalProps
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Mock admin credentials
-  const mockAdmins = [
-    { username: "admin1", password: "admin123", name: "Priya Sharma" },
-    { username: "admin2", password: "admin123", name: "Rajesh Kumar" },
-    { username: "admin3", password: "admin123", name: "Anita Desai" },
-  ];
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setIsLoading(true);
-
-    // Simulate authentication delay
-    setTimeout(() => {
-      const admin = mockAdmins.find(
-        (a) => a.username === username && a.password === password
-      );
-
-      if (admin) {
-        onAuthenticate({
-          username: admin.username,
-          name: admin.name,
-        });
-      } else {
-        setError("Invalid username or password");
-      }
+    try {
+      const user = await loginStaff("admin", username, password);
+      await onAuthenticate({ username: user.username || username, name: user.name });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Unable to sign in. Please try again.");
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -150,14 +135,9 @@ export function AdminAuthPortal({ onAuthenticate, onBack }: AdminAuthPortalProps
             </button>
           </form>
 
-          {/* Demo Credentials */}
           <div className="mt-8 pt-6 border-t border-gray-200">
             <div className="bg-purple-50 rounded-lg p-4">
-              <p className="text-sm font-medium text-purple-900 mb-2">Demo Credentials:</p>
-              <div className="space-y-1 text-xs text-purple-700">
-                <p>Username: <span className="font-mono">admin1</span></p>
-                <p>Password: <span className="font-mono">admin123</span></p>
-              </div>
+              <p className="text-sm font-medium text-purple-900">Use your hospital-issued administrator credentials.</p>
             </div>
           </div>
         </div>
