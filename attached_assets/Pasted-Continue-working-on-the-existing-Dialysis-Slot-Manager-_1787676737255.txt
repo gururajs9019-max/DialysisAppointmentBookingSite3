@@ -1,0 +1,810 @@
+Continue working on the existing Dialysis Slot Manager application.
+
+IMPORTANT:
+Do NOT rebuild or redesign the application.
+Do NOT change the existing Figma-based UI.
+Do NOT touch the Patient Portal.
+
+Make only the functional/backend/frontend integration changes required below.
+
+==================================================
+1. ADMIN PORTAL → DASHBOARD → TODAY'S PATIENTS
+==================================================
+
+In the Administrator Portal Dashboard, there is a section/card showing patients who are scheduled for dialysis today.
+
+Currently:
+
+Dashboard
+→ Click patient
+→ Opens "Assign Patient" page
+→ Administrator has to search/select the same patient again.
+
+THIS IS INCORRECT.
+
+Change the navigation flow so that the selected patient is automatically passed to the slot assignment page.
+
+Expected behavior:
+
+Administrator Dashboard
+→ Today's Dialysis Patients
+→ Click Patient
+→ Open Assign Slot / Assign Machine page
+→ The clicked patient is ALREADY SELECTED
+
+The administrator should NOT have to select the patient again.
+
+==================================================
+2. PASS THE CORRECT PATIENT
+==================================================
+
+When clicking a particular patient from the Dashboard, pass that patient's unique ID to the assignment page.
+
+Do NOT pass only the patient name.
+
+Example:
+
+Dashboard patient:
+Patient ID: P001
+Name: John Doe
+
+When clicked:
+
+/assign-slot?patientId=P001
+
+The Assign Slot page should load the patient using the patient ID and automatically populate the patient selection.
+
+The selected patient should be clearly displayed.
+
+Example:
+
+Patient
+[ John Doe ]
+Patient ID: P001
+
+The administrator can then directly proceed with:
+
+- Unit selection
+- Machine selection
+- Date
+- Dialysis slot
+- Assignment
+
+==================================================
+3. DO NOT BREAK EXISTING ASSIGNMENT FUNCTIONALITY
+==================================================
+
+The existing Assign Patient / Assign Slot page should continue to work when accessed normally.
+
+There should be TWO supported flows:
+
+FLOW A — From Dashboard:
+
+Dashboard
+→ Today's Patient
+→ Assign Slot
+→ Patient automatically selected
+
+FLOW B — From Assign Slot page directly:
+
+Assign Slot
+→ Administrator manually searches/selects patient
+
+Do not remove the existing manual patient selection functionality.
+
+==================================================
+4. VALIDATE PATIENT
+==================================================
+
+When the page receives a patientId:
+
+- Fetch the patient from the backend.
+- Verify that the patient exists.
+- Display the patient's name and ID.
+- Automatically select that patient.
+- Do not require another patient selection.
+
+If the patient ID is invalid:
+
+Show an appropriate error such as:
+
+"Patient not found."
+
+Do not silently select another patient.
+
+==================================================
+5. TREATMENT STATUS PAGE
+==================================================
+
+Now modify the existing Treatment Status page.
+
+Currently:
+
+Treatment Status
+→ Click patient
+→ Only patient information is displayed.
+
+CHANGE THIS.
+
+When an Administrator or Doctor clicks a patient in Treatment Status, open the patient detail view containing ALL relevant information.
+
+The patient detail view should contain:
+
+1. Patient Information
+2. Medical Information
+3. Dialysis Prescription
+4. Prescription History / Edit History where applicable
+
+Do not create an entirely new visual design.
+
+Use the existing Figma design language and existing patient-detail components where available.
+
+==================================================
+6. PATIENT INFORMATION SECTION
+==================================================
+
+Keep the existing patient information that is already displayed.
+
+Include the existing registered information such as:
+
+- Patient name
+- Patient ID
+- Date of birth
+- Blood group
+- Place/address
+- Kidney disease
+- Native Kidney Disease
+- Biopsy information
+- Other existing patient information
+
+Do not remove existing fields.
+
+==================================================
+7. MEDICAL INFORMATION SECTION
+==================================================
+
+Add/display the patient's Medical Information in the Treatment Status patient detail view.
+
+Use the existing Medical Information structure from the application.
+
+Include:
+
+COMORBIDITIES
+- Hypertension
+- Diabetes
+
+ACCESS
+- AVF
+- Permacath
+- Temp Catheter
+
+BASIC INVESTIGATION
+
+CBC:
+- Hb
+- TLC
+- PLT
+- MCV
+
+Other investigations:
+- Serum Ferritin
+- Serum Calcium
+- Thyroid Profile
+  - T3
+  - T4
+  - TSH
+- 2D Echo
+- EF percentage
+- Serum Phosphorous
+- Renal Function Test
+  - Urea
+  - Serum Creatinine
+
+OPD/IPD
+
+Also display the patient's viral status where it already exists in the system.
+
+Examples:
+
+- HBsAg
+- HCV
+- HIV
+
+If some information has not been entered, show:
+
+"Not available"
+
+instead of displaying blank/broken UI.
+
+==================================================
+8. DIALYSIS PRESCRIPTION SECTION
+==================================================
+
+Inside the Treatment Status patient detail view, add a complete Dialysis Prescription section.
+
+If the patient ALREADY has a prescription:
+
+Display the existing prescription.
+
+Include the existing prescription fields from the application, including:
+
+FREQUENCY
+
+Number of dialysis sessions:
+- 1/week
+- 2/week
+- 3/week
+- 4/week
+- 5/week
+- 6/week
+- 7/week
+
+Dialysis day(s)
+
+SLOT:
+- 8 AM – 12 PM
+- 12 PM – 4 PM
+- 4 PM – 8 PM
+
+DURATION:
+- 2 hr
+- 3 hr
+- 4 hr
+- 5 hr
+
+Also display any other dialysis prescription fields that already exist in the Figma frontend.
+
+==================================================
+9. IF PRESCRIPTION DOES NOT EXIST
+==================================================
+
+If the selected patient does NOT have a dialysis prescription:
+
+Do NOT show an empty/broken prescription card.
+
+Instead show:
+
+"No dialysis prescription created yet."
+
+And provide a button:
+
+[ + Create Prescription ]
+
+When clicked:
+
+Open the existing prescription creation UI/form from the Figma frontend.
+
+Do NOT create a completely different prescription form.
+
+After saving:
+
+- Save prescription to database.
+- Display the newly created prescription immediately.
+- Show who created it.
+- Show date/time created.
+
+==================================================
+10. EDIT PRESCRIPTION
+==================================================
+
+If a prescription already exists, show:
+
+[ Edit Prescription ]
+
+button.
+
+When clicked, open the existing prescription editing interface that was already designed in the Figma frontend.
+
+Do NOT remove the previous editing functionality.
+
+The user should be able to edit:
+
+- Frequency
+- Dialysis day(s)
+- Slot
+- Duration
+- Other existing dialysis prescription fields
+
+After saving:
+
+- Update the active prescription.
+- Preserve the previous prescription version.
+- Create a prescription history record.
+- Record who edited it.
+- Record exact date and time.
+
+==================================================
+11. PRESCRIPTION AUDIT INFORMATION
+==================================================
+
+Under the active prescription, display:
+
+Created:
+[date] [time]
+By:
+[Administrator/Doctor name]
+
+If it has been edited:
+
+Last edited:
+[date] [time]
+Edited by:
+[Doctor/Administrator name]
+
+Example:
+
+Last edited:
+25 Aug 2026, 10:35 AM
+Edited by:
+Dr. Rahul — Doctor
+
+OR:
+
+Last edited:
+25 Aug 2026, 11:20 AM
+Edited by:
+Admin — Administrator
+
+The information must come from the database.
+
+Do NOT hard-code this.
+
+==================================================
+12. PRESCRIPTION HISTORY
+==================================================
+
+Do not overwrite previous prescription versions.
+
+For every prescription change, store:
+
+- Patient ID
+- Prescription ID
+- Previous values
+- New values
+- Changed by user ID
+- Changed by user name
+- Changed by role
+- Date
+- Time
+- Created/Edited action
+
+Example history:
+
+Prescription History
+
+Version 1
+Created by: Admin
+25 Aug 2026, 09:30 AM
+
+Version 2
+Edited by: Dr. Rahul
+25 Aug 2026, 10:35 AM
+
+Version 3
+Edited by: Admin
+25 Aug 2026, 11:20 AM
+
+The current prescription should always be clearly identified.
+
+==================================================
+13. ADMINISTRATOR AND DOCTOR SYNCHRONIZATION
+==================================================
+
+The prescription must be shared between Administrator and Doctor portals.
+
+If Administrator creates or edits a prescription:
+
+→ Save to backend
+→ Update current prescription
+→ Create history
+→ Record Administrator as editor
+→ Make updated prescription available in Doctor Portal
+
+If Doctor creates or edits a prescription:
+
+→ Save to backend
+→ Update current prescription
+→ Create history
+→ Record Doctor as editor
+→ Make updated prescription available in Administrator Portal
+
+Both portals must always see the latest active prescription.
+
+==================================================
+14. ROLE INFORMATION
+==================================================
+
+Use the authenticated user's actual role.
+
+Supported roles:
+
+- Administrator
+- Doctor
+
+Do not infer the editor from the frontend.
+
+The backend must determine the authenticated user and role.
+
+The frontend should only display the resulting information.
+
+==================================================
+15. NOTIFICATION FOR PRESCRIPTION CHANGES
+==================================================
+
+Use the existing notification system if already implemented.
+
+When Doctor edits a prescription:
+
+Create a notification for Administrator:
+
+"Prescription updated by Dr. [Name] for [Patient Name]."
+
+When Administrator edits a prescription:
+
+Create a notification for Doctor:
+
+"Prescription updated by Administrator for [Patient Name]."
+
+Do not create duplicate notifications on refresh.
+
+==================================================
+16. BACKEND/API REQUIREMENTS
+==================================================
+
+Make sure the Treatment Status page gets its information from the backend.
+
+Create/use APIs similar to:
+
+GET /api/patients/:patientId
+
+GET /api/patients/:patientId/medical-information
+
+GET /api/patients/:patientId/prescription
+
+GET /api/patients/:patientId/prescription-history
+
+POST /api/patients/:patientId/prescription
+
+PUT /api/patients/:patientId/prescription
+
+Use the existing backend architecture if these endpoints already exist.
+
+Do NOT create duplicate APIs unnecessarily.
+
+Inspect the existing implementation first.
+
+==================================================
+17. DATABASE REQUIREMENTS
+==================================================
+
+Ensure the database supports:
+
+Patient
+Medical Information
+Dialysis Prescription
+Prescription History
+User
+Role
+Notifications
+
+Prescription history should be relationally connected to the patient and prescription.
+
+Do not store prescription history only in frontend state or localStorage.
+
+==================================================
+18. TREATMENT STATUS PATIENT DETAIL UI
+==================================================
+
+When clicking a patient:
+
+Treatment Status
+→ Patient Card
+→ Patient Detail
+
+The detail view should contain clearly separated sections/cards:
+
+--------------------------------
+Patient Information
+--------------------------------
+
+Patient information
+
+--------------------------------
+Medical Information
+--------------------------------
+
+Medical information
+
+--------------------------------
+Dialysis Prescription
+--------------------------------
+
+Current prescription
+
+[ Edit Prescription ]
+
+or, if absent:
+
+No prescription created yet.
+
+[ + Create Prescription ]
+
+--------------------------------
+Prescription History
+--------------------------------
+
+Previous changes and audit information
+
+Do not make the UI unnecessarily complicated.
+
+Follow the existing Figma styling.
+
+==================================================
+19. PRESERVE EXISTING UI
+==================================================
+
+VERY IMPORTANT:
+
+Do not redesign the application.
+
+Do not change:
+
+- Colors
+- Fonts
+- Typography
+- Card styling
+- Sidebar
+- Navigation
+- Existing page layouts
+- Existing Figma components
+- Existing responsive behavior
+
+Reuse existing components wherever possible.
+
+Only add the missing functionality and connect it to the backend.
+
+==================================================
+20. PATIENT PORTAL RESTRICTION
+==================================================
+
+DO NOT TOUCH THE PATIENT PORTAL.
+
+Do not modify:
+
+- Patient Portal UI
+- Patient Portal routes
+- Patient Portal components
+- Patient Portal styling
+- Patient Portal forms
+- Patient Portal functionality
+
+All changes in this task are limited to:
+
+- Administrator Portal
+- Doctor Portal where required for prescription synchronization
+- Backend
+- Database
+- APIs
+
+==================================================
+21. IMPORTANT BUG-PREVENTION REQUIREMENTS
+==================================================
+
+Fix the following potential issues while implementing:
+
+1. Clicking a Dashboard patient must never require selecting that patient again.
+
+2. Patient ID must be used instead of patient name for navigation and database operations.
+
+3. Do not create duplicate patient records.
+
+4. Do not create duplicate prescriptions when editing.
+
+5. Editing a prescription must create a new history/version, not destroy the previous version.
+
+6. Refreshing the page must retain the correct patient and prescription data.
+
+7. The latest prescription must be identical in Administrator and Doctor portals.
+
+8. Editor name and role must come from authenticated user information.
+
+9. Date/time must come from the backend/database and be stored consistently.
+
+10. Do not break existing dashboard, Treatment Status, scheduling, or authentication functionality.
+
+==================================================
+22. TEST THESE FLOWS
+==================================================
+
+After implementation, test the following.
+
+TEST 1:
+
+Administrator Dashboard
+→ Today's patient
+→ Click Patient A
+
+Expected:
+
+Assign Slot page opens
+Patient A is already selected.
+
+No additional patient selection required.
+
+--------------------------------
+
+TEST 2:
+
+Administrator Dashboard
+→ Today's patient
+→ Click Patient B
+
+Expected:
+
+Assign Slot page opens
+Patient B is already selected.
+
+Patient A must NOT be selected.
+
+--------------------------------
+
+TEST 3:
+
+Treatment Status
+→ Click Patient
+
+Expected:
+
+Patient detail opens with:
+
+- Patient Information
+- Medical Information
+- Dialysis Prescription
+
+--------------------------------
+
+TEST 4:
+
+Patient without prescription
+
+Treatment Status
+→ Patient
+→ No prescription
+
+Expected:
+
+"No dialysis prescription created yet."
+
+[ + Create Prescription ]
+
+--------------------------------
+
+TEST 5:
+
+Create prescription
+
+Click:
+
+[ + Create Prescription ]
+
+Save prescription.
+
+Expected:
+
+Prescription appears immediately.
+
+Created date/time and creator are displayed.
+
+--------------------------------
+
+TEST 6:
+
+Edit prescription
+
+Click:
+
+[ Edit Prescription ]
+
+Change duration from 3 hr → 4 hr.
+
+Save.
+
+Expected:
+
+Current prescription shows 4 hr.
+
+History shows previous version.
+
+Editor information shows the correct user.
+
+--------------------------------
+
+TEST 7:
+
+Doctor edits prescription
+
+Doctor changes prescription.
+
+Expected:
+
+Administrator sees updated prescription.
+
+Administrator receives notification.
+
+History shows:
+
+Edited by Doctor.
+
+--------------------------------
+
+TEST 8:
+
+Administrator edits prescription
+
+Administrator changes prescription.
+
+Expected:
+
+Doctor sees updated prescription.
+
+Doctor receives notification.
+
+History shows:
+
+Edited by Administrator.
+
+--------------------------------
+
+TEST 9:
+
+Refresh page.
+
+Expected:
+
+All data remains correct.
+
+--------------------------------
+
+TEST 10:
+
+Patient Portal.
+
+Expected:
+
+Patient Portal remains unchanged and functional.
+
+==================================================
+23. FINAL CHECK
+==================================================
+
+Before finishing:
+
+- Inspect all changed files.
+- Make sure no Patient Portal files were modified.
+- Run the application.
+- Run database migrations if required.
+- Test the API.
+- Test Dashboard → Assign Slot navigation.
+- Test Treatment Status → Patient Detail.
+- Test Create Prescription.
+- Test Edit Prescription.
+- Test Prescription History.
+- Test Doctor/Admin synchronization.
+- Test notifications.
+- Test authentication/authorization.
+
+Do not finish by saying the feature is implemented unless it actually works in the running application.
+
+At the end, report:
+
+1. Files changed
+2. Backend/API changes
+3. Database changes
+4. Dashboard navigation fix
+5. Treatment Status changes
+6. Prescription creation/editing implementation
+7. Prescription history implementation
+8. Admin/Doctor synchronization
+9. Notification implementation
+10. Confirmation that Patient Portal was NOT modified
+11. Any remaining issues
