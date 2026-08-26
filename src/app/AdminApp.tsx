@@ -2,7 +2,6 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { logoutStaff } from "./lib/appointmentApi";
-import { persistQuickAssignment } from "./lib/quickAssignment.mjs";
 import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
@@ -1312,7 +1311,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               Select Patient
             </h3>
             <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => setDraft(d => ({ ...d, patient: p, unit: null, machine: null }))} />
+              onSelect={p => setDraft(d => ({ ...d, patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
           </>
         )}
         {step === 2 && draft.patient && (
@@ -1684,10 +1683,10 @@ function AddCategoryModal({ onAdd, onClose }: { onAdd: (cat: MachineTypeConfig) 
 
 // ─── Machine Section ──────────────────────────────────────────────────────────
 
-function MachineSection({ machines: initialMachines, patients, sessions, units, onAssigned }: {
+function MachineSection({ machines: initialMachines, patients, sessions, units, onNavigate }: {
   machines: Machine[]; patients: Patient[]; sessions: DialysisSession[];
   units: DialysisUnit[];
-  onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
+  onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine }) => void;
 }) {
   const [machines, setMachines] = useState(initialMachines);
   const [customCategories, setCustomCategories] = useState<MachineTypeConfig[]>([]);
@@ -1701,7 +1700,6 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
   const [showAddMachine, setShowAddMachine] = useState(false);
   const [editMachine, setEditMachine] = useState<Machine | null>(null);
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const [quickAssignMachine, setQuickAssignMachine] = useState<Machine | null>(null);
 
   const filtered = useMemo(() => machines.filter(m => {
     if (filterUnit !== "All" && m.unit !== filterUnit) return false;
@@ -1858,7 +1856,7 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
             )}
 
             {m.status === "available" && (
-              <button onClick={() => setQuickAssignMachine(m)}
+              <button onClick={() => onNavigate("assign-patient", "Assign Patient", { machine: m })}
                 className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors font-semibold">
                 <CalendarPlus className="w-3.5 h-3.5" /> Assign Patient
               </button>
@@ -1933,20 +1931,6 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
         <AddCategoryModal
           onAdd={cat => { setCustomCategories(p => [...p, cat]); setShowAddCategory(false); }}
           onClose={() => setShowAddCategory(false)} />
-      )}
-      {quickAssignMachine && (
-        <QuickAssignModal machine={quickAssignMachine} patients={patients} sessions={sessions}
-          onAssigned={async (session, machineId) => {
-            await persistQuickAssignment(
-              onAssigned,
-              (assignedMachineId, patientName) => setMachines(prev => prev.map(m =>
-                m.id === assignedMachineId ? { ...m, status: "scheduled", nextPatient: patientName } : m
-              )),
-              session,
-              machineId,
-            );
-          }}
-          onClose={() => setQuickAssignMachine(null)} />
       )}
     </div>
   );
@@ -5408,7 +5392,7 @@ export default function AdminApp({
           />
         );
       case "patient-history":   return <PatientHistorySection sessions={sessions} prescriptions={prescriptions} />;
-      case "machines":          return <MachineSection machines={machines} patients={patients} sessions={sessions} units={units} onAssigned={handleAssigned} />;
+      case "machines":          return <MachineSection machines={machines} patients={patients} sessions={sessions} units={units} onNavigate={navigate} />;
       case "viral-status":      return <ViralStatusSection patients={patients} />;
       case "register-patient":  return <RegisterPatientSection onCreated={patient => setPatients(prev => [patient, ...prev])} />;
       case "notifications":     return <NotificationsSection notifications={notifications} rxNotifications={rxNotifications} markRxRead={id => markRxRead(id)} onNavigate={v => navigate(v as NavSection, v)} onSystemRead={async id => {

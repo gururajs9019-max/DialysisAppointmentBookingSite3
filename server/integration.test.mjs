@@ -38,7 +38,7 @@ async function expectStatus(promise, status, message) {
   return result.payload;
 }
 
-async function runBrowserPatientHandoffTest(patient) {
+async function runBrowserPatientHandoffTest(patient, machineCode) {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -53,6 +53,22 @@ async function runBrowserPatientHandoffTest(patient) {
     await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
     assert.equal(await page.getByText(patient.name, { exact: true }).isVisible(), true, "selected patient name must be shown at unit selection");
     assert.equal(await page.getByText(`(${patient.uhid})`, { exact: true }).isVisible(), true, "selected patient UHID must be shown at unit selection");
+
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("button", { name: "Machines", exact: true }).click();
+    await page.getByRole("heading", { name: "Machine Management" }).waitFor();
+    const machineHeading = page.getByRole("heading", { name: machineCode, exact: true });
+    const machineCard = machineHeading.locator("xpath=../../..");
+    await machineCard.getByRole("button", { name: "Assign Patient", exact: true }).click();
+    await page.getByRole("heading", { name: "Select Patient" }).waitFor();
+    await page.getByRole("button").filter({ hasText: patient.name }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("heading", { name: /Select Machine —/ }).waitFor();
+    const selectedMachine = page.getByRole("button").filter({ hasText: machineCode });
+    assert.equal(await selectedMachine.count(), 1, "machine action should preselect the chosen machine");
+    assert.match(await selectedMachine.getAttribute("class") || "", /border-violet-500/, "prefilled machine should remain selected after choosing a patient");
 
     await page.getByRole("button", { name: "Dashboard", exact: true }).click();
     await page.route(`${baseUrl}/api/patients/${encodeURIComponent(patient.id)}`, route => route.fulfill({
@@ -112,16 +128,16 @@ try {
       body: { unitId: "U1", code: `${run}-${suffix}`, name: `${run} ${suffix}`, category },
     }), 201, "admin should create test machine");
     ids.machines.push(result.machine.id);
-    return result.machine.id;
+    return result.machine;
   };
   const negativeMachine = await createMachine("NEG-1", "Negative");
   const secondNegativeMachine = await createMachine("NEG-2", "Negative");
   const hcvMachine = await createMachine("HCV", "HCV");
-  await runBrowserPatientHandoffTest(primary.patient);
+  await runBrowserPatientHandoffTest(primary.patient, negativeMachine.code);
   const date = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   const session = await expectStatus(request("/api/sessions", {
     method: "POST", cookie: doctor,
-    body: { patientId: primary.patient.id, machineId: negativeMachine, unitId: "U1", date, slot: "Slot 1" },
+    body: { patientId: primary.patient.id, machineId: negativeMachine.id, unitId: "U1", date, slot: "Slot 1" },
   }), 201, "doctor should schedule a compatible session");
   ids.sessions.push(session.session.id);
   assert.equal(session.session.status, "scheduled", "new session POST DTO must retain scheduled status");
@@ -129,15 +145,15 @@ try {
   assert.equal(scheduledSessions.sessions.find(item => item.id === session.session.id)?.status, "scheduled", "persisted session must not be represented as completed");
   await expectStatus(request("/api/sessions", {
     method: "POST", cookie: admin,
-    body: { patientId: second.patient.id, machineId: negativeMachine, unitId: "U1", date, slot: "Slot 1" },
+    body: { patientId: second.patient.id, machineId: negativeMachine.id, unitId: "U1", date, slot: "Slot 1" },
   }), 409, "machine double booking must conflict");
   await expectStatus(request("/api/sessions", {
     method: "POST", cookie: admin,
-    body: { patientId: primary.patient.id, machineId: secondNegativeMachine, unitId: "U1", date, slot: "Slot 1" },
+    body: { patientId: primary.patient.id, machineId: secondNegativeMachine.id, unitId: "U1", date, slot: "Slot 1" },
   }), 409, "patient double booking must conflict");
   await expectStatus(request("/api/sessions", {
     method: "POST", cookie: admin,
-    body: { patientId: hcvPatient.patient.id, machineId: secondNegativeMachine, unitId: "U1", date, slot: "Slot 2" },
+    body: { patientId: hcvPatient.patient.id, machineId: secondNegativeMachine.id, unitId: "U1", date, slot: "Slot 2" },
   }), 409, "viral-incompatible machine assignment must conflict");
   assert.ok(hcvMachine, "HCV machine creation is retained for cleanup coverage");
   await expectStatus(request(`/api/sessions/${session.session.id}`, {
