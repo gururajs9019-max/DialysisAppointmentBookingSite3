@@ -192,6 +192,17 @@ try {
   assert.equal(persistedMissed?.status, "missed", "session status must persist as missed");
   assert.equal(persistedMissed?.missedReason, "Personal reason", "missed reason must survive the session DTO");
   assert.equal(persistedMissed?.missedReasonOther, `${run} transport disruption`, "other missed reason must survive the session DTO");
+  const machineAfterMissed = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machine availability should refresh after a missed session");
+  const stillScheduledMachine = machineAfterMissed.machines.find(item => item.id === negativeMachine.id);
+  assert.equal(stillScheduledMachine?.status, "scheduled", "machine should remain scheduled while another active session remains");
+  assert.equal(stillScheduledMachine?.next_patient, primary.patient.name, "machine should expose the next remaining active patient");
+  await expectStatus(request(`/api/sessions/${browserSession.id}`, {
+    method: "PATCH", cookie: doctor, body: { status: "cancelled" },
+  }), 200, "staff should be able to cancel a scheduled session");
+  const machineAfterCancellation = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machine availability should refresh after a cancelled session");
+  const releasedMachine = machineAfterCancellation.machines.find(item => item.id === negativeMachine.id);
+  assert.equal(releasedMachine?.status, "available", "machine should be released after its last active session is cancelled");
+  assert.equal(releasedMachine?.next_patient, null, "released machine should not expose a cancelled patient");
 
   const prescription = await expectStatus(request("/api/prescriptions", {
     method: "POST", cookie: doctor,

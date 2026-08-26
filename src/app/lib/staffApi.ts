@@ -210,8 +210,17 @@ export const updateMachine = (id: string, changes: Pick<Machine, "status"> & Par
   request(`/api/machines/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
 export const createMachine = (machine: { unitId: string; code: string; name: string; category: string; status: string; notes?: string }) =>
   request<{ machine: Record<string, unknown> }>("/api/machines", { method: "POST", body: JSON.stringify(machine) }, "save");
-export const updateSession = (id: string, payload: { status: string; [key: string]: unknown }) =>
-  request(`/api/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }, "save");
+export const updateSession = async (id: string, payload: { status: string; [key: string]: unknown }) => {
+  const result = await request<{ session: Record<string, unknown>; machine?: Record<string, unknown> }>(
+    `/api/sessions/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    "save",
+  );
+  return {
+    session: asSession(result.session),
+    machine: result.machine ? asMachine(result.machine) : undefined,
+  };
+};
 export const createSession = (session: { patientId: string; machineId: string; unitId: string; date: string; slot: string; status?: string; [key: string]: unknown }) =>
   request<{ session: { id: string } }>("/api/sessions", { method: "POST", body: JSON.stringify(session) }, "save");
 export const markNotificationRead = (id: string, read: boolean) =>

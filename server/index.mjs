@@ -148,6 +148,38 @@ async function createSession(input, actor) {
   });
 }
 function sessionDto(r) { return { id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:r.session_date, slot:r.slot, status:r.status, ...r.data, createdAt:r.created_at, updatedAt:r.updated_at }; }
+async function fetchMachineWithNextSession(client, machineId) {
+  return (await client.query(`
+    SELECT m.*,
+      next_session.patient_name AS next_patient,
+      next_session.session_date AS next_patient_date,
+      next_session.slot AS next_patient_slot
+    FROM dialysis_machines m
+    LEFT JOIN LATERAL (
+      SELECT p.data->>'name' AS patient_name, s.session_date, s.slot
+      FROM dialysis_sessions s
+      JOIN patients p ON p.id = s.patient_id
+      WHERE s.machine_id = m.id
+        AND s.status IN ('scheduled', 'waiting', 'running')
+        AND s.session_date >= CURRENT_DATE
+      ORDER BY s.session_date, s.slot, s.created_at
+      LIMIT 1
+    ) next_session ON true
+    WHERE m.id = $1
+  `, [machineId])).rows[0] ?? null;
+}
+async function recalculateMachineAvailability(client, machineId) {
+  const machine = (await client.query("SELECT id,status FROM dialysis_machines WHERE id=$1 FOR UPDATE", [machineId])).rows[0];
+  if (!machine) throw httpError(404, "Machine was not found.");
+  const active = (await client.query(
+    "SELECT 1 FROM dialysis_sessions WHERE machine_id=$1 AND status IN ('scheduled','waiting','running') AND session_date >= CURRENT_DATE LIMIT 1",
+    [machineId],
+  )).rowCount > 0;
+  if (["available", "scheduled"].includes(machine.status)) {
+    await client.query("UPDATE dialysis_machines SET status=$2,updated_at=now() WHERE id=$1", [machineId, active ? "scheduled" : "available"]);
+  }
+  return fetchMachineWithNextSession(client, machineId);
+}
 
 async function appointmentList() { return (await pool.query("SELECT data FROM dialysis_appointments ORDER BY data->>'appointmentDate',data->>'appointmentTime',created_at")).rows.map(r => r.data); }
 async function appointmentCreate(input) {
@@ -211,7 +243,23 @@ async function api(req, res, url) {
 
     if (path === "/api/sessions" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id ORDER BY session_date DESC,slot"); sendJson(res,200,{sessions:r.rows.map(sessionDto)}); return true; }
     if (path === "/api/sessions" && req.method==="POST") { const actor=await requireStaff(req); sendJson(res,201,{session:await createSession(await readJson(req),actor)}); return true; }
-    if (parts[1]==="sessions" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req)); if(!SESSION_STATUSES.includes(x.status)) throw httpError(400,"Invalid session status."); const r=await pool.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1 RETURNING *",[id,x.status,x]); if(!r.rowCount) throw httpError(404,"Session was not found."); await transaction(c=>audit(c,actor,"session.update","session",id,{status:x.status})); sendJson(res,200,{session:r.rows[0]}); return true; }
+    if (parts[1]==="sessions" && parts.length===3 && req.method==="PATCH") {
+      const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req));
+      if(!SESSION_STATUSES.includes(x.status)) throw httpError(400,"Invalid session status.");
+      const result = await transaction(async client => {
+        const existing = (await client.query("SELECT machine_id FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
+        if (!existing) throw httpError(404, "Session was not found.");
+        await client.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1", [id,x.status,x]);
+        const session = (await client.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0];
+        const machine = ["missed", "cancelled"].includes(x.status)
+          ? await recalculateMachineAvailability(client, existing.machine_id)
+          : null;
+        await audit(client,actor,"session.update","session",id,{status:x.status});
+        return { session: sessionDto(session), machine };
+      });
+      sendJson(res,200,result);
+      return true;
+    }
     if (path === "/api/missed-slots" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT * FROM dialysis_sessions WHERE status='missed' ORDER BY session_date DESC"); sendJson(res,200,{missedSlots:r.rows}); return true; }
 
     if (path === "/api/prescriptions" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT p.*,pt.uhid,pt.data patient_data,creator.name created_by_name,creator.role created_by_role,editor.name updated_by_name,editor.role updated_by_role FROM prescriptions p JOIN patients pt ON pt.id=p.patient_id LEFT JOIN portal_users creator ON creator.id=p.created_by LEFT JOIN LATERAL (SELECT changed_by FROM prescription_versions WHERE prescription_id=p.id ORDER BY version DESC LIMIT 1) latest_version ON true LEFT JOIN portal_users editor ON editor.id=latest_version.changed_by ORDER BY p.updated_at DESC"); sendJson(res,200,{prescriptions:r.rows.map(x=>({id:x.id,patientId:x.patient_id,patientName:x.patient_data.name,patientUhid:x.uhid,version:x.version,status:x.status,...x.data,createdAt:x.created_at,updatedAt:x.updated_at,createdBy:x.created_by_name||"Staff",createdByRole:x.created_by_role||"Doctor",updatedBy:x.updated_by_name||x.created_by_name||"Staff",updatedByRole:x.updated_by_role||x.created_by_role||"Doctor"}))}); return true; }

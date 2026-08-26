@@ -5329,6 +5329,13 @@ export default function AdminApp({
         }
       : machine));
   };
+  const applySessionUpdate = async (id: string, payload: { status: string; [key: string]: unknown }, updates: Partial<DialysisSession>) => {
+    const result = await updateSession(id, payload);
+    setSessions(prev => prev.map(s => s.id === id ? { ...s, ...result.session, ...updates } : s));
+    if (result.machine) {
+      setMachines(prev => prev.map(machine => machine.id === result.machine!.id ? result.machine! : machine));
+    }
+  };
   const handleLogout = async () => {
     if (window.confirm("Logout?")) {
       await logoutStaff();
@@ -5398,7 +5405,7 @@ export default function AdminApp({
             units={units}
             onUpdateSession={async (id, updates) => {
               const next = updates.status === "Running" ? "running" : updates.status === "Waiting" ? "waiting" : "completed";
-              try { await updateSession(id, { status: next }); setSessions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s)); }
+              try { await applySessionUpdate(id, { status: next }, updates); }
               catch (error) { setStaffError(error instanceof Error ? error.message : "Session status could not be saved."); }
             }}
           />
@@ -5428,8 +5435,10 @@ export default function AdminApp({
             }}
             onUpdateMissedReason={async (id, reason, otherText) => {
               try {
-                await updateSession(id, { status: "missed", missedReason: reason, ...(otherText ? { missedReasonOther: otherText } : {}) });
-                setSessions(prev => prev.map(s => s.id === id ? { ...s, missedReason: reason, missedReasonOther: otherText || undefined } : s));
+                await applySessionUpdate(id, { status: "missed", missedReason: reason, ...(otherText ? { missedReasonOther: otherText } : {}) }, {
+                  missedReason: reason,
+                  missedReasonOther: otherText || undefined,
+                });
               } catch (error) { setStaffError(error instanceof Error ? error.message : "Missed-slot reason could not be saved."); }
             }} />
         );
