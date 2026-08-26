@@ -1157,7 +1157,9 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     ? units.find(u => u.id === prefillMachine.unit) ?? null
     : null;
 
-  const [step, setStep] = useState<AssignStep>(prefillMachine ? 3 : prefillPatientId ? 2 : 1);
+  // Patient-ID preselection is resolved asynchronously, so start on the
+  // patient-safe step while the fetch is in flight.
+  const [step, setStep] = useState<AssignStep>(1);
   const [draft, setDraft] = useState<AssignmentDraft>({
     patient: null, unit: prefillUnit, machine: prefillMachine ?? null,
     slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: "",
@@ -1171,13 +1173,14 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     if (!prefillPatientId) {
       setPrefillLoading(false);
       setPrefillError(null);
+      setStep(1);
       return;
     }
     let cancelled = false;
     setPrefillLoading(true);
     setPrefillError(null);
     setDraft(d => ({ ...d, patient: null, unit: null, machine: prefillMachine ?? null }));
-    setStep(prefillMachine ? 3 : 1);
+    setStep(1);
     fetchPatientById(prefillPatientId)
       .then(patient => {
         if (cancelled) return;
@@ -1311,7 +1314,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               onSelect={p => setDraft(d => ({ ...d, patient: p, unit: null, machine: null }))} />
           </>
         )}
-        {step === 2 && (
+        {step === 2 && draft.patient && (
           <>
             <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">2</span>
@@ -1322,7 +1325,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               onSelect={u => setDraft(d => ({ ...d, unit: u, machine: null }))} />
           </>
         )}
-        {step === 3 && (
+        {step === 3 && draft.patient && draft.unit && (
           <>
             <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">3</span>
@@ -1330,6 +1333,16 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
             </h3>
             <Step3SelectMachine machines={machines} patient={draft.patient!} unit={draft.unit!}
               selected={draft.machine} onSelect={m => setDraft(d => ({ ...d, machine: m }))} />
+          </>
+        )}
+        {((step === 2 && !draft.patient) || (step === 3 && (!draft.patient || !draft.unit))) && (
+          <>
+            <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">1</span>
+              Select Patient
+            </h3>
+            <Step1SelectPatient patients={patients} selected={draft.patient}
+              onSelect={p => setDraft(d => ({ ...d, patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
           </>
         )}
         {step === 4 && (
