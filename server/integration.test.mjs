@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
+import { chromium } from "playwright";
 
 const baseUrl = process.env.TEST_BASE_URL || "http://127.0.0.1:5000";
 if (!process.env.STAFF_ADMIN_PASSWORD || !process.env.STAFF_DOCTOR_PASSWORD || !process.env.DATABASE_URL) {
@@ -37,15 +38,49 @@ async function expectStatus(promise, status, message) {
   return result.payload;
 }
 
+async function runBrowserPatientHandoffTest(patient) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    await page.getByRole("button", { name: patient.name, exact: true }).click();
+    await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
+    assert.equal(await page.getByText(patient.name, { exact: true }).isVisible(), true, "selected patient name must be shown at unit selection");
+    assert.equal(await page.getByText(`(${patient.uhid})`, { exact: true }).isVisible(), true, "selected patient UHID must be shown at unit selection");
+
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.route(`${baseUrl}/api/patients/${encodeURIComponent(patient.id)}`, route => route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Patient was not found." }),
+    }));
+    await page.getByRole("button", { name: patient.name, exact: true }).click();
+    await page.getByText(/Patient was not found\./).waitFor();
+    assert.equal(await page.getByRole("heading", { name: "Select Patient" }).isVisible(), true, "missing patient must return to visible patient selection");
+    assert.equal(await page.getByText(/Search for a patient below to choose one manually\./).isVisible(), true, "missing patient must show recovery guidance");
+    assert.equal(await page.getByText(/Assigning for/).count(), 0, "missing patient must not select a fallback patient");
+  } finally {
+    await browser.close();
+  }
+}
+
 try {
   await expectStatus(request("/api/patients"), 401, "unauthenticated patient read must be denied");
   const admin = await login("admin", process.env.STAFF_ADMIN_PASSWORD);
   const doctor = await login("doctor", process.env.STAFF_DOCTOR_PASSWORD);
+  const today = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date());
 
   const primary = await expectStatus(request("/api/patients", {
     method: "POST", cookie: admin,
     body: {
       uhid: `${run}-NEG`, name: `${run} Negative Patient`, viralStatus: { hepatitisB: "Negative", hepatitisC: "Negative", hiv: "Negative" },
+      dialysisDays: [today], dialysisDaysPerWeek: 1,
       medicalInfo: { dialysisAccess: "AV Fistula", opdIpd: "OPD" },
       investigations: { cbc: { hemoglobin: "10.4 g/dL" }, serumFerritin: "280 ng/mL" },
     },
@@ -82,6 +117,7 @@ try {
   const negativeMachine = await createMachine("NEG-1", "Negative");
   const secondNegativeMachine = await createMachine("NEG-2", "Negative");
   const hcvMachine = await createMachine("HCV", "HCV");
+  await runBrowserPatientHandoffTest(primary.patient);
   const date = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   const session = await expectStatus(request("/api/sessions", {
     method: "POST", cookie: doctor,

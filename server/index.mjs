@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { dirname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
@@ -217,8 +217,16 @@ async function start() {
       return;
     }
     try {
+      const contentTypes = {
+        ".css": "text/css; charset=utf-8",
+        ".html": "text/html; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".svg": "image/svg+xml",
+      };
+      res.writeHead(200, { "Content-Type": contentTypes[extname(requestedPath)] || "application/octet-stream" });
       res.end(await readFile(requestedPath));
     } catch {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(await readFile(join(distRoot, "index.html")));
     }
   }

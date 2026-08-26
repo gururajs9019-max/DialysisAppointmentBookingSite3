@@ -1,0 +1,1 @@
+- [Browser test runtime](browser-test-runtime.md) — Playwright checks need declared Nix browser libraries as well as the npm package.

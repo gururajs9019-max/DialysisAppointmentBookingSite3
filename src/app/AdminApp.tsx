@@ -741,7 +741,8 @@ function Step2SelectUnit({ units, machines, patient, selected, onSelect }: {
       <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 flex gap-2.5 items-start">
         <Info className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
         <p className="text-sm text-violet-800">
-          Assigning for <strong>{patient.name}</strong>. Required machine category: <strong>{req}</strong>.
+          Assigning for <strong>{patient.name}</strong> <span className="font-semibold">({patient.uhid})</span>.
+          Required machine category: <strong>{req}</strong>.
           Select a dialysis unit to proceed.
         </p>
       </div>
