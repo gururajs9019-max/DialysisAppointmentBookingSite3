@@ -1692,6 +1692,10 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
   const [customCategories, setCustomCategories] = useState<MachineTypeConfig[]>([]);
   const allCategories = useMemo(() => [...BASE_CATEGORIES, ...customCategories], [customCategories]);
 
+  useEffect(() => {
+    setMachines(initialMachines);
+  }, [initialMachines]);
+
   const [filterUnit, setFilterUnit] = useState("All");
   const [filterCat, setFilterCat] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -5316,6 +5320,14 @@ export default function AdminApp({
       doctor: session.doctor, notes: session.notes,
     });
     setSessions(prev => [{ ...session, id: created.session.id }, ...prev]);
+    setMachines(prev => prev.map(machine => machine.id === session.machineId
+      ? {
+          ...machine,
+          status: "scheduled",
+          nextPatient: session.patientName,
+          nextAvailableTime: `${session.date} · ${session.slot}`,
+        }
+      : machine));
   };
   const handleLogout = async () => {
     if (window.confirm("Logout?")) {

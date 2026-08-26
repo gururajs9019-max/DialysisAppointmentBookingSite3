@@ -38,7 +38,7 @@ async function expectStatus(promise, status, message) {
   return result.payload;
 }
 
-async function runBrowserPatientHandoffTest(patient, machineCode) {
+async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate) {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -69,6 +69,22 @@ async function runBrowserPatientHandoffTest(patient, machineCode) {
     const selectedMachine = page.getByRole("button").filter({ hasText: machineCode });
     assert.equal(await selectedMachine.count(), 1, "machine action should preselect the chosen machine");
     assert.match(await selectedMachine.getAttribute("class") || "", /border-violet-500/, "prefilled machine should remain selected after choosing a patient");
+
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("heading", { name: "Schedule & Confirm" }).waitFor();
+    await page.getByRole("button", { name: /Normal Slot/ }).click();
+    await page.getByRole("button", { name: /^Slot 1/ }).click();
+    await page.locator('input[type="date"]').fill(assignmentDate);
+    await page.getByRole("main").getByRole("button", { name: "Assign Patient", exact: true }).click();
+    await page.getByRole("heading", { name: "Confirm Assignment" }).waitFor();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await page.getByRole("heading", { name: "Assignment Confirmed" }).waitFor();
+    await page.getByRole("button", { name: "Machines", exact: true }).click();
+    await page.getByRole("heading", { name: "Machine Management" }).waitFor();
+    const assignedMachineCard = page.getByRole("heading", { name: machineCode, exact: true }).locator("xpath=../../..");
+    assert.equal(await assignedMachineCard.getByText("Reserved", { exact: true }).isVisible(), true, "assigned machine should show scheduled status without a refresh");
+    assert.equal(await assignedMachineCard.getByText(patient.name, { exact: true }).isVisible(), true, "assigned machine should show its next patient without a refresh");
+    assert.equal(await assignedMachineCard.getByRole("button", { name: "Assign Patient", exact: true }).count(), 0, "scheduled machine must not be offered as available");
 
     await page.getByRole("button", { name: "Dashboard", exact: true }).click();
     await page.route(`${baseUrl}/api/patients/${encodeURIComponent(patient.id)}`, route => route.fulfill({
@@ -133,14 +149,25 @@ try {
   const negativeMachine = await createMachine("NEG-1", "Negative");
   const secondNegativeMachine = await createMachine("NEG-2", "Negative");
   const hcvMachine = await createMachine("HCV", "HCV");
-  await runBrowserPatientHandoffTest(primary.patient, negativeMachine.code);
-  const date = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const browserAssignmentDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  await runBrowserPatientHandoffTest(primary.patient, negativeMachine.code, browserAssignmentDate);
+  const browserSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-created sessions should be readable");
+  const browserSession = browserSessions.sessions.find(item =>
+    item.patientId === primary.patient.id && item.machineId === negativeMachine.id && item.date === browserAssignmentDate && item.slot === "Slot 1"
+  );
+  assert.ok(browserSession, "browser assignment must persist a session");
+  ids.sessions.push(browserSession.id);
+  const date = new Date(Date.now() + 172_800_000).toISOString().slice(0, 10);
   const session = await expectStatus(request("/api/sessions", {
     method: "POST", cookie: doctor,
     body: { patientId: primary.patient.id, machineId: negativeMachine.id, unitId: "U1", date, slot: "Slot 1" },
   }), 201, "doctor should schedule a compatible session");
   ids.sessions.push(session.session.id);
   assert.equal(session.session.status, "scheduled", "new session POST DTO must retain scheduled status");
+  const machinesAfterAssignment = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machines should be readable after an assignment");
+  const scheduledMachine = machinesAfterAssignment.machines.find(item => item.id === negativeMachine.id);
+  assert.equal(scheduledMachine?.status, "scheduled", "assigned machine must persist as scheduled");
+  assert.equal(scheduledMachine?.next_patient, primary.patient.name, "assigned machine must expose its next patient");
   const scheduledSessions = await expectStatus(request("/api/sessions", { cookie: doctor }), 200, "sessions should be readable");
   assert.equal(scheduledSessions.sessions.find(item => item.id === session.session.id)?.status, "scheduled", "persisted session must not be represented as completed");
   await expectStatus(request("/api/sessions", {
@@ -214,13 +241,16 @@ try {
   assert.equal(typeof analytics.analytics, "object");
   console.log("backend integration tests passed");
 } finally {
-  const allIds = [...ids.patients, ...ids.machines, ...ids.sessions, ...ids.prescriptions];
   try {
+    const sessionIds = ids.patients.length
+      ? (await db.query("SELECT id FROM dialysis_sessions WHERE patient_id = ANY($1::text[])", [ids.patients])).rows.map(row => row.id)
+      : ids.sessions;
+    const allIds = [...ids.patients, ...ids.machines, ...ids.sessions, ...sessionIds, ...ids.prescriptions];
     await db.query("DELETE FROM audit_logs WHERE entity_id = ANY($1::text[])", [allIds]);
     await db.query("DELETE FROM notifications WHERE detail LIKE $1", [`%${run}%`]);
     if (ids.prescriptions.length) await db.query("DELETE FROM prescription_versions WHERE prescription_id = ANY($1::text[])", [ids.prescriptions]);
     if (ids.prescriptions.length) await db.query("DELETE FROM prescriptions WHERE id = ANY($1::text[])", [ids.prescriptions]);
-    if (ids.sessions.length) await db.query("DELETE FROM dialysis_sessions WHERE id = ANY($1::text[])", [ids.sessions]);
+    if (sessionIds.length) await db.query("DELETE FROM dialysis_sessions WHERE id = ANY($1::text[])", [sessionIds]);
     if (ids.machines.length) await db.query("DELETE FROM dialysis_machines WHERE id = ANY($1::text[])", [ids.machines]);
     if (ids.patients.length) await db.query("DELETE FROM patients WHERE id = ANY($1::text[])", [ids.patients]);
   } finally {

@@ -62,8 +62,12 @@ const asPatient = (p: Partial<Patient>): Patient => ({
 
 const asMachine = (m: Record<string, unknown>): Machine => ({
   id: String(m.id), number: String(m.code || m.name || ""), unit: String(m.unit_id || ""), category: String(m.category || "Negative"),
-  name: String(m.name || m.code || ""), status: (m.status || "available") as Machine["status"], currentPatient: null,
-  nextPatient: null, nextAvailableTime: null, lastMaintenance: "", notes: String(m.notes || ""),
+  name: String(m.name || m.code || ""), status: (m.status || "available") as Machine["status"],
+  currentPatient: typeof m.current_patient === "string" ? m.current_patient : null,
+  nextPatient: typeof m.next_patient === "string" ? m.next_patient : null,
+  nextAvailableTime: typeof m.next_patient_date === "string" && typeof m.next_patient_slot === "string"
+    ? `${m.next_patient_date} · ${m.next_patient_slot}` : null,
+  lastMaintenance: "", notes: String(m.notes || ""),
 });
 
 const asSession = (s: Record<string, unknown>): DialysisSession => {

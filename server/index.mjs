@@ -141,6 +141,7 @@ async function createSession(input, actor) {
     const id = randomUUID(), status = input.status && SESSION_STATUSES.includes(input.status) ? input.status : "scheduled";
     try { await client.query("INSERT INTO dialysis_sessions(id,patient_id,machine_id,unit_id,session_date,slot,status,data,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", [id, patientId, machineId, unitId, date, slot, status, { ...input, date, slot }, actor.id]); }
     catch (e) { if (e.code === "23505") throw httpError(409, "Patient or machine is already booked for this date and slot."); throw e; }
+    await client.query("UPDATE dialysis_machines SET status='scheduled', updated_at=now() WHERE id=$1", [machineId]);
     await audit(client, actor, "session.create", "session", id, { patientId, machineId, date, slot });
     await notifyRole(client, actor, actor.role === "doctor" ? "admin" : "doctor", "info", "Dialysis session scheduled", `${patient.data.name} (${patient.uhid}) was scheduled for ${date}, ${slot}.`);
     return sessionDto((await client.query("SELECT s.*,p.uhid,p.data AS patient_data,m.code,m.name AS machine_name,u.name AS unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0]);
@@ -182,7 +183,29 @@ async function api(req, res, url) {
 
     if (path === "/api/units" && req.method==="GET") { await requireStaff(req); sendJson(res,200,{units:(await pool.query("SELECT id,name,active,created_at FROM dialysis_units ORDER BY name")).rows}); return true; }
     if (path === "/api/units" && req.method==="POST") { const actor=await requireStaff(req,"admin"), input=object(await readJson(req)), id=randomUUID(), name=text(input.name,"name",{required:true}); const r=await pool.query("INSERT INTO dialysis_units(id,name) VALUES($1,$2) RETURNING id,name,active",[id,name]); await transaction(c=>audit(c,actor,"unit.create","unit",id)); sendJson(res,201,{unit:r.rows[0]}); return true; }
-    if (path === "/api/machines" && req.method==="GET") { await requireStaff(req); sendJson(res,200,{machines:(await pool.query("SELECT * FROM dialysis_machines ORDER BY code")).rows}); return true; }
+    if (path === "/api/machines" && req.method==="GET") {
+      await requireStaff(req);
+      const r = await pool.query(`
+        SELECT m.*,
+          next_session.patient_name AS next_patient,
+          next_session.session_date AS next_patient_date,
+          next_session.slot AS next_patient_slot
+        FROM dialysis_machines m
+        LEFT JOIN LATERAL (
+          SELECT p.data->>'name' AS patient_name, s.session_date, s.slot
+          FROM dialysis_sessions s
+          JOIN patients p ON p.id = s.patient_id
+          WHERE s.machine_id = m.id
+            AND s.status IN ('scheduled', 'waiting', 'running')
+            AND s.session_date >= CURRENT_DATE
+          ORDER BY s.session_date, s.slot, s.created_at
+          LIMIT 1
+        ) next_session ON true
+        ORDER BY m.code
+      `);
+      sendJson(res,200,{machines:r.rows});
+      return true;
+    }
     if (path === "/api/machines" && req.method==="POST") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), id=randomUUID(), category=text(x.category,"category",{required:true}); if(!MACHINE_CATEGORIES.includes(category)) throw httpError(400,"Invalid machine category."); const r=await pool.query("INSERT INTO dialysis_machines(id,unit_id,code,name,category,status,notes) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",[id,text(x.unitId,"unitId",{required:true}),text(x.code,"machine code",{required:true,max:80}),text(x.name,"name",{required:true}),category,x.status||"available",text(x.notes,"notes")||""]); await transaction(c=>audit(c,actor,"machine.create","machine",id)); sendJson(res,201,{machine:r.rows[0]}); return true; }
     if (parts[1]==="machines" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), id=decodeURIComponent(parts[2]); const fields=["status","notes","name"], changes=Object.fromEntries(Object.entries(x).filter(([k,v])=>fields.includes(k)&&typeof v==="string")); if(!Object.keys(changes).length) throw httpError(400,"No supported machine changes."); if(changes.status && !["available","in-use","scheduled","maintenance","disabled"].includes(changes.status)) throw httpError(400,"Invalid machine status."); const r=await pool.query("UPDATE dialysis_machines SET name=COALESCE($2,name),status=COALESCE($3,status),notes=COALESCE($4,notes),updated_at=now() WHERE id=$1 RETURNING *",[id,changes.name||null,changes.status||null,changes.notes||null]); if(!r.rowCount) throw httpError(404,"Machine was not found."); await transaction(c=>audit(c,actor,"machine.update","machine",id)); sendJson(res,200,{machine:r.rows[0]}); return true; }
 
