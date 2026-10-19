@@ -52,7 +52,10 @@ try {
     (SELECT count(*)::int FROM audit_logs WHERE entity_id=$1 AND action='prescription.revise') audits,
     (SELECT count(*)::int FROM notifications WHERE detail LIKE $2 AND message='Prescription revised') notifications`,
     [prescriptionId, `%${run}%`])).rows[0];
-  const recipientCounts = Object.fromEntries((await db.query("SELECT role,count(*)::int count FROM portal_users GROUP BY role")).rows.map(row => [row.role,row.count]));
+  // This patient's only responsible doctor is its creator. Administrator edits
+  // notify that doctor plus other administrators; doctor edits notify all admins.
+  const adminCount = (await db.query("SELECT count(*)::int count FROM portal_users WHERE role='admin' AND status='Active'")).rows[0].count;
+  const recipientCounts = { doctor: adminCount, admin: adminCount };
   assert.equal((await current()).version, 1, "clinical JSON must never override the DB version");
 
   const beforeInvalid = await sideEffects();

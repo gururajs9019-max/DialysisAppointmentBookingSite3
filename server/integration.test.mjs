@@ -142,9 +142,23 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
     await page.getByRole("button", { name: /Normal Slot/ }).click();
     await page.getByRole("button", { name: /^Slot 1/ }).click();
     await page.locator('input[type="date"]').fill(assignmentDate);
+    const unitsRefreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/units");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await unitsRefreshed;
+    await page.waitForLoadState("networkidle");
+    assert.equal(await page.getByRole("heading", { name: "Schedule & Confirm" }).isVisible(),true,
+      "a background staff refresh must not restart an in-progress assignment");
+    assert.equal(await page.locator('input[type="date"]').inputValue(),assignmentDate,
+      "the assignment date survives background refresh");
     await page.getByRole("main").getByRole("button", { name: "Assign Patient", exact: true }).click();
     await page.getByRole("heading", { name: "Confirm Assignment" }).waitFor();
+    const assignmentResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/sessions" && response.request().method() === "POST");
+    page.on("dialog", dialog => dialog.dismiss());
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    const savedAssignment = await assignmentResponse;
+    const assignmentResult = await savedAssignment.json();
+    assert.equal(savedAssignment.status(),201,assignmentResult.error || "browser assignment must save successfully");
     await page.getByRole("heading", { name: "Assignment Confirmed" }).waitFor();
     await page.getByRole("button", { name: "Machines", exact: true }).click();
     await page.getByRole("heading", { name: "Machine Management" }).waitFor();
@@ -447,8 +461,9 @@ try {
   await expectStatus(request("/api/prescription-histories", {
     method: "POST", cookie: admin, body: { prescriptions: Array.from({ length: 501 }, () => batchBody.prescriptions[0]) },
   }), 400, "batch history queries have a bounded input size");
-  const doctorAfterAdminCreation = await expectStatus(request("/api/notifications", { cookie: doctor }), 200, "doctor should receive administrator creation notifications");
-  assert.ok(doctorAfterAdminCreation.notifications.some(n => n.message === "Prescription created" && n.detail.includes(`${run}-SECOND`)), "administrator-created prescriptions must notify doctors");
+  const doctorAfterAdminCreation = await expectStatus(request("/api/notifications", { cookie: doctor }), 200, "doctor notifications remain readable");
+  assert.ok(!doctorAfterAdminCreation.notifications.some(n => n.message === "Prescription created" && n.detail.includes(`${run}-SECOND`)),
+    "a new patient without an explicit clinical link must not broadcast prescription alerts to unrelated doctors");
   const adminAfterOwnCreation = await expectStatus(request("/api/notifications", { cookie: admin }), 200, "administrator notifications should remain role-scoped");
   assert.ok(!adminAfterOwnCreation.notifications.some(n => n.message === "Prescription created" && n.detail.includes(`${run}-SECOND`)), "the creating administrator must not receive their own creation notification");
   const refreshedAdminCreated = await expectStatus(request("/api/prescriptions", { cookie: doctor }), 200, "new prescription data should persist after refresh");

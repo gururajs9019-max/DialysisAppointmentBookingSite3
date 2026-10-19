@@ -10,3 +10,4 @@
 - [Error diagnostic privacy](error-diagnostic-privacy.md) — Preserve clinical/account privacy during troubleshooting; do not restore full exception dumps to debug publishing.
 - [HTTP upload safety](http-upload-safety.md) — Test byte limits over real TCP; default stream iteration can close a socket before its error reply.
 - [Registration clinical safety](registration-clinical-safety.md) — Simpler controls must preserve historical readings; registration weights remain independently entered values.
+- [Staff notification audience](staff-notification-audience.md) — Broad staff read access is not clinical responsibility; never broadcast prescription alerts to unrelated doctors.

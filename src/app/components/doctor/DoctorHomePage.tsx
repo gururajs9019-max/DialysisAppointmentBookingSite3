@@ -7,7 +7,6 @@ interface DoctorHomePageProps {
   sessions: DialysisSession[];
   machines: Machine[];
   notifications: StaffNotification[];
-  onReadNotification: (id: string) => Promise<void>;
 }
 
 // KPI source data — mirrors AdminApp mock data so counts stay consistent across portals.
@@ -36,7 +35,7 @@ const ALL_MACHINE_STATUSES = [
   "available","available",                                       // U2M06–U2M07
 ] as const;
 
-export function DoctorHomePage({ onNavigate, sessions, machines, notifications, onReadNotification }: DoctorHomePageProps) {
+export function DoctorHomePage({ onNavigate, sessions, machines, notifications }: DoctorHomePageProps) {
   // Computed KPIs — never hardcoded strings; derived from the same data as AdminApp
   const todayStats = {
     scheduled:        sessions.filter(s=>s.date===new Date().toISOString().slice(0,10)&&!["Missed","Cancelled"].includes(s.status)).length,
@@ -82,8 +81,17 @@ export function DoctorHomePage({ onNavigate, sessions, machines, notifications, 
     },
   ];
 
-  const recentActivities = notifications.slice(0,8).map(n=>({id:n.id,read:n.read,type:n.type,message:`${n.message}: ${n.detail||""}`,
-    time:n.created_at?new Date(n.created_at).toLocaleString():"",icon:FileText,color:n.read?"text-gray-400":"text-blue-600"}));
+  const recentActivities = notifications.slice(0, 6).map(notification => ({
+    id: notification.id,
+    read: notification.read,
+    message: notification.message || "Notification",
+    detail: notification.detail || "",
+    time: notification.created_at
+      ? new Date(notification.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : "Time unavailable",
+    icon: FileText,
+    color: notification.read ? "text-gray-400" : "text-blue-600",
+  }));
 
   const upcomingSessions = sessions.filter(s=>s.date>=new Date().toISOString().slice(0,10)&&["Scheduled","Waiting"].includes(s.status))
     .sort((a,b)=>`${a.date}${a.slot}`.localeCompare(`${b.date}${b.slot}`)).slice(0,5)
@@ -222,21 +230,34 @@ export function DoctorHomePage({ onNavigate, sessions, machines, notifications, 
                 <Activity className="w-6 h-6 text-green-600" />
                 Recent Activity
               </h2>
+              <button
+                onClick={() => onNavigate("notifications")}
+                className="text-sm font-medium text-blue-600 hover:text-blue-800"
+              >
+                View all
+              </button>
             </div>
             <div className="space-y-3">
-              {recentActivities.map((activity, idx) => {
+              {recentActivities.length === 0 && (
+                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+                  No recent staff updates.
+                </div>
+              )}
+              {recentActivities.map(activity => {
                 const Icon = activity.icon;
                 return (
                   <div
-                    key={idx}
+                    key={activity.id}
                     className="flex items-start gap-3 p-4 bg-gray-50 rounded-lg"
                   >
                     <Icon className={`w-5 h-5 ${activity.color} flex-shrink-0 mt-0.5`} />
-                    <div className="flex-1">
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm text-gray-900 font-medium">{activity.message}</p>
+                      {activity.detail && <p className="mt-1 break-words text-xs leading-relaxed text-gray-600">{activity.detail}</p>}
                       <p className="text-xs text-gray-600 mt-1">{activity.time}</p>
-                      {!activity.read && <button onClick={() => void onReadNotification(activity.id)}
-                        className="text-xs text-blue-600 mt-1 hover:underline">Mark as read</button>}
+                      <p className={`mt-1 text-[11px] font-semibold ${activity.read ? "text-gray-500" : "text-blue-700"}`}>
+                        {activity.read ? "Read" : "Unread"}
+                      </p>
                     </div>
                   </div>
                 );

@@ -20,3 +20,9 @@ Use integer database revisions for clinical-note concurrency instead of timestam
 **Why:** Timestamp serialization can lose database precision, and timestamps are display metadata rather than a reliable editor baseline. Notes can be edited by both their author and an administrator, so either writer must detect stale changes.
 
 **How to apply:** Require the captured revision on every edit, check it under the row lock, and advance it only on a successful save. Rejected conflicts must not emit successful-update audits or notifications.
+
+Staff form initialization must follow deliberate navigation identity, not refreshed directory-object identity.
+
+**Why:** Background refreshes replace otherwise equivalent objects. Reinitializing from those references can restart an assignment wizard, including immediately after a successful save; faster production responses exposed this intermittent behavior.
+
+**How to apply:** Keep initialization keyed to stable patient, machine, and unit identities. Test a real staff refresh while a form is in progress and verify that its step and entered values survive.

@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
 import type { AdminPrescription, Patient, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
-import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, computeChangedFields, formatRxTimestamp } from "../../AdminApp";
+import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp } from "../../AdminApp";
 import { updatePrescription, PrescriptionConflictError, type DoctorPrescriptionCreatePayload, type PrescriptionMedicationDetails } from "../../lib/staffApi";
 import { PrescriptionConflict } from "../PrescriptionConflict";
 import { usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
@@ -15,6 +15,8 @@ interface DoctorPrescriptionProps {
   doctorName: string;
   addRxNotification: (n: Omit<RxNotification, "id" | "read">) => void;
   onDraftStateChange: PrescriptionDraftStateListener;
+  targetPatientId?: string | null;
+  targetPrescriptionId?: string | null;
 }
 
 const RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis, "dialysisDays">; label: string }[] = [
@@ -39,9 +41,17 @@ function StatusBadge({ status }: { status: AdminPrescription["status"] }) {
 
 type PrescriptionDetails = AdminPrescription & Partial<Omit<DoctorPrescriptionCreatePayload, "patientId" | "medications">>;
 
-export function DoctorPrescription({ onNavigate: _onNavigate, patients, prescriptions, setPrescriptions, doctorName, addRxNotification, onDraftStateChange }: DoctorPrescriptionProps) {
-  const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(prescriptions[0]?.id ?? null);
+export function DoctorPrescription({
+  onNavigate: _onNavigate,
+  patients,
+  prescriptions,
+  setPrescriptions,
+  onDraftStateChange,
+  targetPatientId,
+  targetPrescriptionId,
+}: DoctorPrescriptionProps) {
+  const [search, setSearch] = useState(() => prescriptions.find(rx => rx.id === targetPrescriptionId)?.patientUhid ?? "");
+  const [expanded, setExpanded] = useState<string | null>(targetPrescriptionId ?? prescriptions[0]?.id ?? null);
   const [showNew, setShowNew] = useState(false);
   const [creationSuccess, setCreationSuccess] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -51,6 +61,22 @@ export function DoctorPrescription({ onNavigate: _onNavigate, patients, prescrip
   const [conflict, setConflict] = useState(false);
   const [savingRx, setSavingRx] = useState(false);
   const draftGuard = usePrescriptionDraftGuard(editDraft, savingRx, onDraftStateChange);
+  const initializedTarget = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!targetPatientId || !targetPrescriptionId) {
+      initializedTarget.current = null;
+      return;
+    }
+    const targetKey = `${targetPatientId}:${targetPrescriptionId}`;
+    if (initializedTarget.current === targetKey) return;
+    const prescription = prescriptions.find(rx => rx.id === targetPrescriptionId);
+    const patient = patients.find(item => item.id === targetPatientId);
+    if (!prescription && !patient) return;
+    initializedTarget.current = targetKey;
+    setSearch(prescription?.patientUhid ?? patient?.uhid ?? "");
+    setExpanded(targetPrescriptionId);
+  }, [targetPatientId, targetPrescriptionId, patients, prescriptions]);
 
   const filtered = prescriptions.filter(rx =>
     rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
@@ -82,7 +108,6 @@ export function DoctorPrescription({ onNavigate: _onNavigate, patients, prescrip
     if (!editDraft || savingRx || conflict) return;
     const original = prescriptions.find(p => p.id === editDraft.id);
     if (!original) return;
-    const changed = computeChangedFields(original, editDraft);
     setSavingRx(true);
     try {
       setSaveError(null);
@@ -93,14 +118,6 @@ export function DoctorPrescription({ onNavigate: _onNavigate, patients, prescrip
       setSaveError(error instanceof Error ? error.message : "Prescription could not be saved.");
       return;
     } finally { setSavingRx(false); }
-    addRxNotification({
-      doctorName: doctorName || "Doctor",
-      patientName: original.patientName,
-      patientUhid: original.patientUhid,
-      prescriptionId: original.id,
-      timestamp: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
-      changedFields: changed,
-    });
     setEditingId(null);
     setEditDraft(null);
   }

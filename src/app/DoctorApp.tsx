@@ -12,7 +12,8 @@ import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
 import { DoctorViralStatus } from "./components/doctor/DoctorViralStatus";
 import { DoctorTreatmentProgress } from "./components/doctor/DoctorTreatmentProgress";
 import { logoutStaff } from "./lib/appointmentApi";
-import { loadStaffData, markNotificationRead, type StaffAnalytics, type StaffData, type StaffNotification } from "./lib/staffApi";
+import { loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, type StaffAnalytics, type StaffData, type StaffNotification } from "./lib/staffApi";
+import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import {
   Stethoscope,
   Calendar,
@@ -26,7 +27,8 @@ import {
   User,
   Pill,
   FlaskConical,
-  BarChart2
+  BarChart2,
+  Bell
 } from "lucide-react";
 
 type DoctorView =
@@ -37,7 +39,8 @@ type DoctorView =
   | "analytics"
   | "prescription"
   | "viral-status"
-  | "treatment-progress";
+  | "treatment-progress"
+  | "notifications";
 
 export default function DoctorApp({
   prescriptions,
@@ -60,6 +63,7 @@ export default function DoctorApp({
   const [staffError, setStaffError] = useState<string | null>(null);
   const { onDraftStateChange, confirmLeave } = useStaffLeaveGuard();
   const [notifications, setNotifications] = useState<StaffNotification[]>([]);
+  const [prescriptionTarget, setPrescriptionTarget] = useState<{ patientId: string; prescriptionId: string } | null>(null);
   const applyStaffData = useCallback((data: StaffData) => {
     setPatients(data.patients); setMachines(data.machines); setSessions(data.sessions);
     setAnalytics(data.analytics); setPrescriptions(data.prescriptions); setNotifications(data.notifications);
@@ -96,6 +100,38 @@ export default function DoctorApp({
     const destination = (removed.includes(newView) ? "home" : newView) as DoctorView;
     if (destination !== view && !confirmLeave()) return;
     setView(destination);
+    if (destination !== "prescription") setPrescriptionTarget(null);
+    setMobileMenuOpen(false);
+  };
+
+  const unreadNotificationCount = notifications.filter(notification => !notification.read).length;
+
+  const markRead = async (id: string, read: boolean) => {
+    const result = await markNotificationRead(id, read);
+    setNotifications(previous => previous.map(notification =>
+      notification.id === id ? result.notification : notification,
+    ));
+  };
+
+  const markAllRead = async () => {
+    const result = await markAllNotificationsRead();
+    const markedIds = new Set(result.ids);
+    setNotifications(previous => previous.map(notification =>
+      markedIds.has(notification.id) ? { ...notification, read: true } : notification,
+    ));
+  };
+
+  const openPrescriptionNotification = async (notification: StaffNotification) => {
+    if (!confirmLeave()) return;
+    const target = await openNotificationTarget(notification.id);
+    const refreshed = await loadStaffData();
+    applyStaffData(refreshed);
+    const result = await markNotificationRead(notification.id, true);
+    setNotifications(previous => previous.map(item =>
+      item.id === notification.id ? result.notification : item,
+    ));
+    setPrescriptionTarget({ patientId: target.patientId, prescriptionId: target.prescriptionId });
+    setView("prescription");
     setMobileMenuOpen(false);
   };
 
@@ -174,6 +210,20 @@ export default function DoctorApp({
                 </button>
               </div>
 
+              <button
+                type="button"
+                onClick={() => handleNavigate("notifications")}
+                aria-label={`Notifications${unreadNotificationCount ? `, ${unreadNotificationCount} unread` : ""}`}
+                className="relative rounded-lg p-2 text-gray-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+              >
+                <Bell className="h-5 w-5" />
+                {unreadNotificationCount > 0 && (
+                  <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-rose-600 px-1 text-[10px] font-bold leading-none text-white">
+                    {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                  </span>
+                )}
+              </button>
+
               {/* Mobile Menu Button */}
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -236,10 +286,17 @@ export default function DoctorApp({
         {staffError && <p className="mx-4 mt-4 text-sm text-red-700">{staffError}</p>}
         {view === "home" && (
           <DoctorHomePage onNavigate={handleNavigate} sessions={sessions} machines={machines}
-            notifications={notifications} onReadNotification={async id => {
-              try { await markNotificationRead(id,true); setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n)); }
-              catch(e) { setStaffError(e instanceof Error?e.message:"Notification could not be updated."); }
-            }} />
+            notifications={notifications} />
+        )}
+
+        {view === "notifications" && (
+          <StaffNotificationsPage
+            notifications={notifications}
+            onMarkRead={markRead}
+            onMarkAllRead={markAllRead}
+            onOpenPrescription={openPrescriptionNotification}
+            accent="blue"
+          />
         )}
 
         {view === "schedule" && (
@@ -260,6 +317,7 @@ export default function DoctorApp({
 
         {view === "prescription" && (
           <DoctorPrescription
+            key={prescriptionTarget ? `${prescriptionTarget.patientId}:${prescriptionTarget.prescriptionId}` : "prescriptions"}
             onDraftStateChange={onDraftStateChange}
             onNavigate={handleNavigate}
             patients={patients}
@@ -267,6 +325,8 @@ export default function DoctorApp({
             setPrescriptions={setPrescriptions}
             doctorName={currentDoctor?.name ?? ""}
             addRxNotification={addRxNotification}
+            targetPatientId={prescriptionTarget?.patientId}
+            targetPrescriptionId={prescriptionTarget?.prescriptionId}
           />
         )}
 

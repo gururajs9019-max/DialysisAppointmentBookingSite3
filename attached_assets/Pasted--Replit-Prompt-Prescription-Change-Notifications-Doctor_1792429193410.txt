@@ -1,0 +1,193 @@
+# Replit Prompt: Prescription Change Notifications — Doctor and Administrator Portals Only
+
+Update the existing Dialysis Slot Manager application to implement a notification system whenever a doctor or administrator creates or updates a patient's prescription.
+
+## Critical scope restriction
+
+**The Patient Portal must remain completely untouched.**
+
+Do not modify the Patient Portal's:
+- UI, layout, or navigation
+- Notification bell or notification system
+- Patient dashboard or patient profile
+- Prescription viewing functionality
+- Authentication, permissions, or workflows
+- Frontend components, routes, or pages
+
+Do not add prescription notifications to the Patient Portal.
+
+Implement this feature exclusively within the **Doctor Portal and Administrator Portal**. Shared backend changes are permitted only when necessary for this feature and must not alter Patient Portal behavior.
+
+Before making changes, inspect the existing codebase, prescription creation and update workflows, authentication, database schema, and notification functionality.
+
+## 1. When notifications should be generated
+
+### A. Doctor creates a prescription
+
+After a doctor successfully creates a new prescription:
+- Notify the relevant authorized administrator(s).
+- Notify other authorized doctors responsible for the same patient, where applicable.
+- Do not notify the doctor who performed the action unless the existing system explicitly requires it.
+
+Example notification:
+
+"New prescription created for [Patient Name]."
+
+### B. Doctor updates a prescription
+
+After a doctor successfully updates an existing prescription:
+- Notify the relevant authorized administrator(s).
+- Notify other authorized doctors responsible for the patient, where applicable.
+- Exclude the doctor who performed the update unless explicitly required.
+
+Example notification:
+
+"Prescription updated for [Patient Name]."
+
+### C. Administrator creates a prescription
+
+After an administrator successfully creates a new prescription:
+- Notify the relevant authorized doctor(s) responsible for the patient.
+- Notify other authorized administrators, where appropriate.
+- Exclude the administrator who performed the action unless explicitly required.
+
+Example notification:
+
+"New prescription created for [Patient Name] by an administrator."
+
+### D. Administrator updates a prescription
+
+After an administrator successfully updates a prescription:
+- Notify the relevant authorized doctor(s) responsible for the patient.
+- Notify other authorized administrators, where appropriate.
+- Exclude the administrator who performed the update unless explicitly required.
+
+Example notification:
+
+"Prescription updated for [Patient Name] by an administrator."
+
+**Do not send any of these notifications to patients. Do not add any Patient Portal notification functionality.**
+
+## 2. Notification interface
+
+Reuse the existing notification bell and notification components in the Doctor Portal and Administrator Portal.
+
+If a notification system already exists, extend it rather than creating a duplicate system.
+
+If necessary, add a notification interface exclusively to the Doctor Portal and Administrator Portal.
+
+Required features:
+- Unread notification count.
+- Notification dropdown or dedicated notifications page.
+- Notification message.
+- Date and time.
+- Read/unread status.
+- Mark as read.
+- Mark all as read.
+- Clicking a notification opens the relevant patient or prescription page, provided the recipient has permission to access it.
+
+The notification list and unread count should update without requiring the recipient to log out or refresh the entire application. Use existing real-time functionality if available; otherwise, implement lightweight polling or refresh behavior.
+
+Do not modify the Patient Portal's existing notification components.
+
+## 3. Backend and database integration
+
+Inspect the existing prescription and notification database structures before making changes.
+
+Requirements:
+- Reuse existing notification tables and services where appropriate.
+- Create a database migration only if necessary.
+- Persist notifications so they remain available after refreshing or logging in again.
+- Associate each notification with its intended doctor or administrator recipient.
+- Store notification type, message, related patient/prescription reference, creation timestamp, and read status.
+- Record the authenticated user who created or updated the prescription.
+- Generate notifications through trusted backend logic after a successful prescription operation.
+- Prevent duplicate notifications for the same operation.
+- Never generate notifications for failed prescription operations.
+
+Do not store notifications only in frontend state or browser storage.
+
+Do not create fake or hardcoded notifications.
+
+## 4. Security and authorization
+
+This is a healthcare application. Enforce permissions on the backend and database, not only in the frontend.
+
+- Doctors must receive notifications only for patients and prescriptions they are authorized to access.
+- Administrators must receive notifications according to their existing permissions.
+- Users must not be able to read or modify another user's notifications.
+- Derive the acting user's identity from the authenticated session.
+- Validate recipients on the backend.
+- Avoid exposing sensitive prescription or medication details in notification previews.
+- Preserve existing authentication, roles, and database security policies.
+
+Do not grant any new permissions to Patient Portal users.
+
+## 5. Prescription history
+
+Preserve the existing prescription creation, update, and history functionality.
+
+Where supported, retain:
+- Prescription creator.
+- Last editor.
+- Creation and update timestamps.
+- Historical prescription records.
+
+Creating a new prescription must not overwrite an existing prescription.
+
+Follow the application's existing amendment workflow for finalized prescriptions, if one exists.
+
+A notification must not replace the prescription's audit trail.
+
+## 6. Strict portal isolation
+
+This change must affect only the Doctor Portal and Administrator Portal.
+
+**Administrator Portal**
+- Display notifications for relevant prescription events.
+- Update the unread count.
+- Support viewing and marking notifications as read.
+
+**Doctor Portal**
+- Display notifications for relevant prescription events.
+- Update the unread count.
+- Support viewing and marking notifications as read.
+
+**Patient Portal**
+- No changes whatsoever.
+- No new notification bell or prescription notifications.
+- No UI or navigation changes.
+- No changes to patient-facing prescription workflows.
+- No changes to patient authentication or permissions.
+- No frontend refactoring or shared-component changes that alter its behavior.
+
+If a component is shared across portals, ensure changes are isolated by portal and do not change the Patient Portal's rendering or behavior.
+
+Do not rebuild any portal.
+
+## 7. Testing requirements
+
+Verify all the following:
+
+1. A doctor creates a prescription and the appropriate authorized administrator(s) receive a notification.
+2. A doctor updates a prescription and the appropriate authorized administrator(s) receive a notification.
+3. An administrator creates a prescription and the appropriate authorized doctor(s) receive a notification.
+4. An administrator updates a prescription and the appropriate authorized doctor(s) receive a notification.
+5. Unnecessary self-notifications are excluded.
+6. Unread counts and read status work correctly.
+7. Notifications persist after refreshing the page.
+8. Notification links respect existing permissions.
+9. Failed prescription operations do not generate notifications.
+10. Duplicate submissions do not generate duplicate notifications.
+11. Users cannot access another user's notifications.
+12. Existing prescription creation, updating, and history continue working.
+13. The Patient Portal remains completely unchanged, including its UI, routes, notifications, permissions, and workflows.
+14. Dialysis scheduling and machine management remain unaffected.
+
+## Final implementation instruction
+
+Inspect the existing codebase first, then implement and test the notification feature end to end in the Doctor Portal and Administrator Portal only.
+
+Do not make visual-only changes or use mock notifications. Implement the actual backend event handling, database persistence, recipient authorization, and frontend notification display.
+
+**The Patient Portal is out of scope and must not be modified.**

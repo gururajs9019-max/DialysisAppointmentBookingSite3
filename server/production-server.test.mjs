@@ -216,6 +216,7 @@ try {
     await runProductionIntegration(baseUrl, "server/staff-backend-gaps.test.mjs");
     await runProductionIntegration(baseUrl, "server/prescription-creation.test.mjs");
     await runProductionIntegration(baseUrl, "server/patient-registration.test.mjs");
+    await runProductionIntegration(baseUrl, "server/prescription-notifications.test.mjs");
   }
   console.log("production server smoke test passed");
 } finally {

@@ -15,6 +15,8 @@ export interface StaffNotification {
   detail?: string;
   read: boolean;
   created_at?: string;
+  patient_id?: string | null;
+  record_id?: string | null;
 }
 
 export interface StaffData {
@@ -415,4 +417,10 @@ export const updateSession = async (id: string, payload: SessionUpdatePayload) =
 export const createSession = (session: { patientId: string; machineId: string; unitId: string; date: string; slot: string; status?: string; [key: string]: unknown }) =>
   request<{ session: { id: string } }>("/api/sessions", { method: "POST", body: JSON.stringify(session) }, "save");
 export const markNotificationRead = (id: string, read: boolean) =>
-  request(`/api/notifications/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ read }) }, "save");
+  request<{ notification: StaffNotification }>(`/api/notifications/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ read }) }, "save");
+
+export const markAllNotificationsRead = () =>
+  request<{ ids: string[] }>("/api/notifications/read-all", { method: "PATCH" }, "save");
+
+export const openNotificationTarget = (id: string) =>
+  request<{ patientId: string; prescriptionId: string }>(`/api/notifications/${encodeURIComponent(id)}/target`);

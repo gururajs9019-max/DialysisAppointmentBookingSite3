@@ -9,6 +9,7 @@ import { validateSessionLinks } from "./session-clinical-links.mjs";
 import { withRequestErrorBoundary } from "./request-error-boundary.mjs";
 import { apiErrorResponse, httpError } from "./api-errors.mjs";
 import { readJson } from "./request-body.mjs";
+import { notifyPrescription } from "./prescription-notifications.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -466,10 +467,7 @@ export async function api(req, res, url) {
           [randomUUID(), requestId, prescriptionData, actor.id],
         );
         await audit(client, actor, "prescription.create", "prescription", requestId, { version: 1 });
-        await notifyRole(
-          client, actor, actor.role === "doctor" ? "admin" : "doctor", "info", "Prescription created",
-          `${patient.data.name} (${patient.uhid}) prescription v1 was created.`,
-        );
+        await notifyPrescription(client, actor, patient, created);
         return { prescription: created, created: true };
       });
       sendJson(res, result.created ? 201 : 200, { prescription: result.prescription });
@@ -500,7 +498,7 @@ export async function api(req, res, url) {
         const r=await c.query("UPDATE prescriptions SET version=version+1,status=$2,data=$3,updated_at=now() WHERE id=$1 RETURNING *",[id,status,next]);
         await c.query("INSERT INTO prescription_versions(id,prescription_id,version,snapshot,changed_by) VALUES($1,$2,$3,$4,$5)",[randomUUID(),id,r.rows[0].version,next,actor.id]);
         await audit(c,actor,"prescription.revise","prescription",id,{version:r.rows[0].version,changedFields});
-        await notifyRole(c,actor,actor.role==="doctor"?"admin":"doctor","info","Prescription revised",`${patient.data.name} (${patient.uhid}) prescription v${r.rows[0].version}; changed: ${changedFields.join(", ") || "status"}.`);
+        await notifyPrescription(c,actor,patient,r.rows[0]);
         return r.rows[0];
       });
       sendJson(res,200,{prescription:updated}); return true;
@@ -510,6 +508,28 @@ export async function api(req, res, url) {
     if (path === "/api/clinical-notes" && req.method==="POST") { const actor=await requireStaff(req), x=object(await readJson(req)), id=randomUUID(); await fetchPatient(pool,text(x.patientId,"patientId",{required:true})); const r=await pool.query("INSERT INTO clinical_notes(id,patient_id,session_id,body,author_id) VALUES($1,$2,$3,$4,$5) RETURNING *",[id,x.patientId,x.sessionId||null,text(x.body,"note",{required:true,max:10000}),actor.id]); await transaction(c=>audit(c,actor,"note.create","clinical_note",id)); sendJson(res,201,{note:r.rows[0]}); return true; }
     if (parts[1]==="patients" && parts[3]==="clinical-notes" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT n.*,u.name author_name FROM clinical_notes n JOIN portal_users u ON u.id=n.author_id WHERE patient_id=$1 ORDER BY created_at DESC",[decodeURIComponent(parts[2])]); sendJson(res,200,{notes:r.rows}); return true; }
     if (path === "/api/notifications" && req.method==="GET") { const user=await requireStaff(req); const r=await pool.query("SELECT * FROM notifications WHERE user_id IS NULL OR user_id=$1 ORDER BY created_at DESC",[user.id]); sendJson(res,200,{notifications:r.rows}); return true; }
+    if (path === "/api/notifications/read-all" && req.method==="PATCH") {
+      const user = await requireStaff(req);
+      // Preserve existing shared system alerts; prescription alerts are always per-recipient.
+      const result = await pool.query(
+        "UPDATE notifications SET read=true WHERE NOT read AND (user_id=$1 OR user_id IS NULL) RETURNING id",
+        [user.id],
+      );
+      sendJson(res,200,{ids:result.rows.map(row=>row.id)}); return true;
+    }
+    if (parts[1]==="notifications" && parts.length===4 && parts[3]==="target" && req.method==="GET") {
+      const user = await requireStaff(req);
+      // A client-supplied patient/prescription ID is never trusted as a notification link.
+      const result = await pool.query(
+        `SELECT p.patient_id,p.id prescription_id FROM notifications n
+         JOIN prescriptions p ON p.id=n.record_id AND p.patient_id=n.patient_id
+         JOIN patients patient ON patient.id=p.patient_id
+         WHERE n.id=$1 AND n.user_id=$2`,
+        [decodeURIComponent(parts[2]),user.id],
+      );
+      if (!result.rowCount) throw httpError(404,"The notification or its prescription is no longer available.");
+      sendJson(res,200,{patientId:result.rows[0].patient_id,prescriptionId:result.rows[0].prescription_id}); return true;
+    }
     if (parts[1]==="notifications" && parts.length===3 && req.method==="PATCH") { const user=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req)); if(typeof x.read!=="boolean") throw httpError(400,"read must be boolean."); const r=await pool.query("UPDATE notifications SET read=$2 WHERE id=$1 AND (user_id IS NULL OR user_id=$3) RETURNING *",[id,x.read,user.id]); if(!r.rowCount) throw httpError(404,"Notification was not found."); sendJson(res,200,{notification:r.rows[0]}); return true; }
     if (path === "/api/analytics" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT (SELECT count(*) FROM patients) patients,(SELECT count(*) FROM patients WHERE lifecycle='Active') active_patients,(SELECT count(*) FROM dialysis_machines WHERE status='available') available_machines,(SELECT count(*) FROM dialysis_sessions WHERE session_date=current_date AND status NOT IN ('cancelled','missed')) today_sessions,(SELECT count(*) FROM dialysis_sessions WHERE status='missed' AND session_date >= current_date-30) missed_last_30_days"); sendJson(res,200,{analytics:r.rows[0]}); return true; }
     if (path === "/api/audit-logs" && req.method==="GET") { await requireStaff(req,"admin"); const r=await pool.query("SELECT a.*,u.name actor_name,u.role actor_role FROM audit_logs a LEFT JOIN portal_users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 500"); sendJson(res,200,{auditLogs:r.rows}); return true; }

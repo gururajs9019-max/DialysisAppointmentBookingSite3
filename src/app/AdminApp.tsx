@@ -1,13 +1,14 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useStaffSync } from "./lib/useStaffSync";
 import { usePrescriptionLeaveGuard, usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "./lib/usePrescriptionLeaveGuard";
-import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData } from "./lib/staffApi";
+import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData, type StaffNotification } from "./lib/staffApi";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
 import { ScheduleClinicalLinks, type ScheduleLinks } from "./components/admin/ScheduleClinicalLinks";
 import { logoutStaff } from "./lib/appointmentApi";
-import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
@@ -131,11 +132,6 @@ interface AssignmentDraft {
 
 interface ValidationResult {
   ok: boolean; errors: string[]; warnings: string[];
-}
-
-interface Notification {
-  id: string; type: "warning" | "info" | "error" | "success";
-  message: string; detail: string; time: string; read: boolean;
 }
 
 export interface RxDialysis {
@@ -401,15 +397,6 @@ export const INITIAL_SESSIONS: DialysisSession[] = [
   { id: "S005", patientId: "P005", patientName: "Sanjay Patel",  uhid: "KMCRI-2024-005", date: "Today",    slot: "Slot 1", machine: "Machine 08",    machineId: "M08",   unit: "U1", duration: "4 hours", doctor: "Dr. Suresh Pillai",         attendance: "Completed", notes: "Transplant follow-up scheduled.",  startTime: "8:00 AM", endTime: "12:00 PM", status: "Running",   slotType: "normal" },
   { id: "S006", patientId: "P007", patientName: "Ramesh Nair",   uhid: "KMCRI-2024-007", date: "Recently", slot: "Slot 3", machine: "U2-Machine 01", machineId: "U2M01", unit: "U2", duration: "4 hours", doctor: "Dr. Suresh Pillai",         attendance: "Missed",    notes: "Patient did not report.",          startTime: "4:00 PM", endTime: "8:00 PM",  status: "Completed", missedReason: "Personal reason", slotType: "normal" },
   { id: "S007", patientId: "P006", patientName: "Anjali Sharma", uhid: "KMCRI-2024-006", date: "Recently", slot: "Slot 1", machine: "Machine 06",    machineId: "M06",   unit: "U1", duration: "4 hours", doctor: "Dr. Anita Krishnamurthy",    attendance: "Completed", notes: "Viral panel awaited.",             startTime: "8:00 AM", endTime: "12:00 PM", status: "Completed", slotType: "normal" },
-];
-
-const INITIAL_NOTIFICATIONS: Notification[] = [
-  { id: "N001", type: "error",   message: "Machine 05 under maintenance",      detail: "Scheduled service — out of rotation until clearance.", time: "Recently", read: false },
-  { id: "N002", type: "warning", message: "Missed dialysis — Ramesh Nair",     detail: "Patient did not attend Slot 3. Slot is now vacant.",    time: "Recently", read: false },
-  { id: "N003", type: "info",    message: "Empty slot available — Machine 06", detail: "Slot 3 freed up. Fill from waiting list.",               time: "Recently", read: false },
-  { id: "N004", type: "success", message: "New patient registered",            detail: "Anjali Sharma (KMCRI-2024-006) added to the system.",    time: "Recently", read: false },
-  { id: "N005", type: "warning", message: "Emergency dialysis — Ramesh Nair",  detail: "Patient requires immediate slot allocation.",            time: "Recently", read: true },
-  { id: "N006", type: "warning", message: "Viral status update — Priya Reddy", detail: "HIV status awaiting confirmation. Machine on hold.",    time: "Recently", read: true },
 ];
 
 export const INITIAL_ADMIN_PRESCRIPTIONS: AdminPrescription[] = [
@@ -1200,7 +1187,8 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       })
       .finally(() => { if (!cancelled) setPrefillLoading(false); });
     return () => { cancelled = true; };
-  }, [prefillPatientId, prefillMachine, prefillUnit]);
+  // Refreshes replace directory objects, not the user's navigation intent.
+  }, [prefillPatientId, prefillMachine?.id, prefillUnit?.id]);
 
   const setField = (key: keyof AssignmentDraft, value: string) =>
     setDraft(d => ({ ...d, [key]: value }));
@@ -3027,7 +3015,7 @@ function blankPrescription(patient: Patient): AdminPrescription {
   };
 }
 
-function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName, onPatientUpdated, onSessionStatus, onOpenSchedule, onDraftStateChange }: {
+function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName, onPatientUpdated, onSessionStatus, onOpenSchedule, onDraftStateChange, targetPatientId, targetPrescriptionId }: {
   patients: Patient[];
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
@@ -3037,6 +3025,8 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   onSessionStatus: (session: DialysisSession, status: "running" | "waiting" | "completed") => Promise<void>;
   onOpenSchedule: () => void;
   onDraftStateChange: PrescriptionDraftStateListener;
+  targetPatientId?: string | null;
+  targetPrescriptionId?: string | null;
 }) {
   const [filter, setFilter] = useState<TreatmentStatus | "All">("All");
   const [search, setSearch] = useState("");
@@ -3049,6 +3039,22 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   const [conflict, setConflict] = useState(false);
   const [savingRx, setSavingRx] = useState(false);
   const draftGuard = usePrescriptionDraftGuard(editDraft, savingRx, onDraftStateChange);
+  const initializedTarget = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!targetPrescriptionId || !targetPatientId) {
+      initializedTarget.current = null;
+      return;
+    }
+    const targetKey = `${targetPatientId}:${targetPrescriptionId}`;
+    if (initializedTarget.current === targetKey) return;
+    const patient = patients.find(candidate => candidate.id === targetPatientId);
+    if (!patient) return;
+    initializedTarget.current = targetKey;
+    setFilter("All");
+    setSearch(patient.uhid || patient.name);
+    setExpandedId(patient.id);
+  }, [targetPatientId, targetPrescriptionId, patients]);
 
   const counts = (["Active", "Transplanted", "Expired", "Shifted", "Discontinued"] as TreatmentStatus[]).reduce(
     (acc, s) => ({ ...acc, [s]: patients.filter(p => p.treatmentStatus === s).length }), {} as Record<TreatmentStatus, number>
@@ -3162,7 +3168,9 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
       {/* ── Unified patient cards ── */}
       <div className="space-y-4">
         {filteredPatients.map(p => {
-          const rx        = prescriptions.find(r => r.patientId === p.id) ?? null;
+          const rx        = prescriptions.find(r => r.patientId === p.id && r.id === targetPrescriptionId)
+            ?? prescriptions.find(r => r.patientId === p.id)
+            ?? null;
           const todaySess = sessions.find(s => s.patientId === p.id && s.date === "Today") ?? null;
           const isExpanded = expandedId === p.id;
           const isEditing  = rx !== null && editingRxId === rx.id;
@@ -4872,104 +4880,6 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
   );
 }
 
-// ─── Notifications Section ────────────────────────────────────────────────────
-
-function NotificationsSection({
-  notifications: initial,
-  rxNotifications,
-  markRxRead,
-  onNavigate,
-  onSystemRead,
-}: {
-  notifications: Notification[];
-  rxNotifications: RxNotification[];
-  markRxRead: (id: string) => void;
-  onNavigate: (view: string) => void;
-  onSystemRead: (id: string) => Promise<void>;
-}) {
-  const [notifs, setNotifs] = useState(initial);
-  useEffect(()=>setNotifs(initial),[initial]);
-  const unread = notifs.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
-
-  const typeConfig: Record<Notification["type"], { cls: string; icon: React.ReactNode }> = {
-    info:    { cls: "border-blue-200 bg-blue-50",     icon: <Info className="w-5 h-5 text-blue-600" /> },
-    warning: { cls: "border-amber-200 bg-amber-50",   icon: <AlertTriangle className="w-5 h-5 text-amber-600" /> },
-    success: { cls: "border-emerald-200 bg-emerald-50", icon: <CheckCircle className="w-5 h-5 text-emerald-600" /> },
-    error:   { cls: "border-red-200 bg-red-50",       icon: <AlertCircle className="w-5 h-5 text-red-600" /> },
-  };
-
-  return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <SectionHeader title="Notifications" subtitle="System alerts and administrative updates" />
-        {unread > 0 && (
-          <button onClick={() => { setNotifs(p => p.map(n => ({ ...n, read: true }))); notifs.filter(n => !n.read).forEach(n => void onSystemRead(n.id)); rxNotifications.forEach(n => markRxRead(n.id)); }}
-            className="flex items-center gap-2 text-sm px-4 py-2 bg-violet-50 text-violet-700 border border-violet-200 rounded-xl hover:bg-violet-100 font-semibold">
-            <RefreshCw className="w-3.5 h-3.5" /> Mark All Read
-          </button>
-        )}
-      </div>
-
-      {rxNotifications.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-xs font-semibold text-violet-700 uppercase tracking-widest">Prescription Updates by Doctors</p>
-          {rxNotifications.map(n => (
-            <div key={n.id}
-              className={`flex gap-4 p-4 rounded-2xl border-2 cursor-pointer transition-all hover:shadow-md ${n.read ? "border-slate-100 bg-slate-50 opacity-70" : "border-violet-200 bg-violet-50"}`}
-              onClick={() => { markRxRead(n.id); onNavigate("treatment-status"); }}
-            >
-              <div className="shrink-0 mt-0.5"><Pill className="w-5 h-5 text-violet-600" /></div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-2 mb-0.5">
-                  <p className="font-semibold text-slate-800">Prescription Updated</p>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {!n.read && <span className="w-2 h-2 bg-violet-500 rounded-full" />}
-                    <span className="text-xs text-slate-400">{n.timestamp}</span>
-                  </div>
-                </div>
-                <p className="text-sm text-slate-700">{n.doctorName} updated the dialysis prescription for {n.patientName}</p>
-                {n.changedFields.length > 0 && (
-                  <p className="text-xs text-slate-500 mt-1">Changed: {n.changedFields.join(", ")}</p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {rxNotifications.length > 0 && notifs.length > 0 && (
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">System Alerts</p>
-        )}
-        {notifs.map(n => {
-          const cfg = typeConfig[n.type];
-          return (
-            <div key={n.id} className={`flex gap-4 p-4 rounded-2xl border-2 transition-all ${cfg.cls} ${n.read ? "opacity-60" : ""}`}>
-              <div className="shrink-0 mt-0.5">{cfg.icon}</div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-2 mb-0.5">
-                  <p className="font-semibold text-slate-800">{n.message}</p>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {!n.read && <span className="w-2 h-2 bg-blue-500 rounded-full" />}
-                    <span className="text-xs text-slate-400">{n.time}</span>
-                  </div>
-                </div>
-                <p className="text-xs text-slate-600">{n.detail}</p>
-              </div>
-              {!n.read && (
-                <button onClick={() => { setNotifs(p => p.map(x => x.id === n.id ? { ...x, read: true } : x)); void onSystemRead(n.id); }}
-                  className="shrink-0 text-xs text-slate-400 hover:text-slate-600 underline self-start">
-                  Dismiss
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // ─── Doctors Section ─────────────────────────────────────────────────────────
 
 const SPECIALIZATIONS = [
@@ -5440,8 +5350,6 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
 export default function AdminApp({
   prescriptions,
   setPrescriptions,
-  rxNotifications,
-  markRxRead,
 }: {
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
@@ -5455,25 +5363,25 @@ export default function AdminApp({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [prefillMachine, setPrefillMachine] = useState<Machine | null>(null);
   const [prefillPatientId, setPrefillPatientId] = useState<string | null>(null);
+  const [prescriptionTarget, setPrescriptionTarget] = useState<{ patientId: string; prescriptionId: string } | null>(null);
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [units, setUnits] = useState<DialysisUnit[]>([]);
   const [sessions, setSessions] = useState<DialysisSession[]>(INITIAL_SESSIONS);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<StaffNotification[]>([]);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
   const { onDraftStateChange, confirmLeave } = usePrescriptionLeaveGuard();
   const applyStaffData = useCallback((records: StaffData) => {
     setPatients(records.patients); setMachines(records.machines); setUnits(records.units);
     setSessions(records.sessions); setPrescriptions(records.prescriptions);
-    setNotifications(records.notifications.map(n => ({id:n.id,type:n.type||"info",message:n.message||"Notification",
-      detail:n.detail||"",time:n.created_at||"",read:n.read})));
+    setNotifications(records.notifications);
   }, [setPrescriptions]);
   useStaffSync(isAuthenticated, applyStaffData, setStaffError);
   const onPatientUpdated = (patient: Patient) => setPatients(prev=>prev.map(p=>p.id===patient.id?patient:p));
 
-  const unreadCount = notifications.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
+  const unreadCount = notifications.filter(n => !n.read).length;
 
   const handleAssigned = async (session: DialysisSession, _machineId: string) => {
     const created = await createSession({
@@ -5517,10 +5425,7 @@ export default function AdminApp({
             const records = await loadStaffData();
             setPatients(records.patients); setMachines(records.machines); setUnits(records.units);
             setSessions(records.sessions); setPrescriptions(records.prescriptions);
-            setNotifications(records.notifications.map(n => ({
-              id: n.id, type: n.type || "info", message: n.message || "Notification",
-              detail: n.detail || "", time: n.created_at || "", read: n.read,
-            })));
+            setNotifications(records.notifications);
           } catch (error) {
             setStaffError(error instanceof Error ? error.message : "Saved administrator records could not be loaded.");
           } finally { setStaffLoading(false); }
@@ -5532,13 +5437,52 @@ export default function AdminApp({
     );
   }
 
-  const navigate = (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => {
-    if (section !== activeSection && !confirmLeave()) return;
+  const navigate = (section: NavSection, label: string, opts?: {
+    machine?: Machine;
+    patientId?: string;
+    prescriptionId?: string;
+    skipGuard?: boolean;
+  }) => {
+    if (section !== activeSection && !opts?.skipGuard && !confirmLeave()) return;
     setActiveSection(section);
     setActiveSectionLabel(label);
     setPrefillMachine(opts?.machine ?? null);
     setPrefillPatientId(opts?.patientId ?? null);
+    setPrescriptionTarget(section === "treatment-status" && opts?.prescriptionId
+      ? { patientId: opts.patientId ?? "", prescriptionId: opts.prescriptionId }
+      : null);
     setSidebarOpen(false);
+  };
+
+  const markRead = async (id: string, read: boolean) => {
+    const result = await markNotificationRead(id, read);
+    setNotifications(previous => previous.map(notification =>
+      notification.id === id ? result.notification : notification,
+    ));
+  };
+
+  const markAllRead = async () => {
+    const result = await markAllNotificationsRead();
+    const markedIds = new Set(result.ids);
+    setNotifications(previous => previous.map(notification =>
+      markedIds.has(notification.id) ? { ...notification, read: true } : notification,
+    ));
+  };
+
+  const openPrescriptionNotification = async (notification: StaffNotification) => {
+    if (!confirmLeave()) return;
+    const target = await openNotificationTarget(notification.id);
+    const refreshed = await loadStaffData();
+    applyStaffData(refreshed);
+    const result = await markNotificationRead(notification.id, true);
+    setNotifications(previous => previous.map(item =>
+      item.id === notification.id ? result.notification : item,
+    ));
+    navigate("treatment-status", "Treatment Status", {
+      patientId: target.patientId,
+      prescriptionId: target.prescriptionId,
+      skipGuard: true,
+    });
   };
 
   const sidebarLinks: { section: NavSection; label: string; icon: React.ReactNode; highlight?: boolean; group: string }[] = [
@@ -5593,11 +5537,16 @@ export default function AdminApp({
       case "machines":          return <MachineSection machines={machines} patients={patients} sessions={sessions} units={units} onNavigate={navigate} />;
       case "viral-status":      return <ViralStatusSection patients={patients} onPatientUpdated={onPatientUpdated} />;
       case "register-patient":  return <RegisterPatientSection onCreated={patient => setPatients(prev => [patient, ...prev])} />;
-      case "notifications":     return <NotificationsSection notifications={notifications} rxNotifications={rxNotifications} markRxRead={id => markRxRead(id)} onNavigate={v => navigate(v as NavSection, v)} onSystemRead={async id => {
-        try { await markNotificationRead(id, true); setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); }
-        catch (error) { setStaffError(error instanceof Error ? error.message : "Notification could not be updated."); }
-      }} />;
+      case "notifications":     return <StaffNotificationsPage
+        notifications={notifications}
+        onMarkRead={markRead}
+        onMarkAllRead={markAllRead}
+        onOpenPrescription={openPrescriptionNotification}
+        accent="violet"
+      />;
       case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} onPatientUpdated={onPatientUpdated} onDraftStateChange={onDraftStateChange}
+        targetPatientId={prescriptionTarget?.patientId}
+        targetPrescriptionId={prescriptionTarget?.prescriptionId}
         onOpenSchedule={()=>navigate("live-schedule","Live Schedule")}
         onSessionStatus={(session,status)=>applySessionUpdate(session.id,{status},{status:({running:"Running",waiting:"Waiting",completed:"Completed"} as const)[status]})} />;
       case "search-patients":
@@ -5725,9 +5674,10 @@ export default function AdminApp({
               <CalendarPlus className="w-3.5 h-3.5" /> Assign Patient
             </button>
             <button onClick={() => navigate("notifications", "Notifications")}
+              aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
               className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
               <Bell className="w-5 h-5" />
-              {unreadCount > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />}
+              {unreadCount > 0 && <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-rose-600 px-1 text-[10px] font-bold leading-none text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
             </button>
             <div className="hidden sm:flex items-center gap-2 ml-1 pl-3 border-l border-slate-200">
               <p className="text-xs font-semibold text-slate-700">{currentUser?.name}</p>
