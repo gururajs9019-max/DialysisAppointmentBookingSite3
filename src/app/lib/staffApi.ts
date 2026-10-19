@@ -34,6 +34,13 @@ export class StaffApiError extends Error {
   }
 }
 
+export class PrescriptionConflictError extends StaffApiError {
+  constructor(message: string, public readonly currentVersion: number) {
+    super(message, "save");
+    this.name = "PrescriptionConflictError";
+  }
+}
+
 async function request<T>(url: string, options: RequestInit = {}, operation: "load" | "save" = "load"): Promise<T> {
   let response: Response;
   try {
@@ -41,8 +48,11 @@ async function request<T>(url: string, options: RequestInit = {}, operation: "lo
   } catch {
     throw new StaffApiError("The staff service is unavailable. Check your connection and try again.", operation);
   }
-  const body = await response.json().catch(() => null) as { error?: string } | null;
+  const body = await response.json().catch(() => null) as { error?: string; code?: string; currentVersion?: number } | null;
   if (!response.ok) {
+    if (response.status === 409 && body?.code === "PRESCRIPTION_VERSION_CONFLICT") {
+      throw new PrescriptionConflictError(body.error || "This prescription has a newer version.", body.currentVersion!);
+    }
     if (response.status === 401 || response.status === 403) clearPrescriptionHistoryCache();
     throw new StaffApiError(body?.error || `Staff request failed (${response.status}).`, operation);
   }
@@ -232,6 +242,7 @@ export async function loadStaffData(): Promise<StaffData> {
 
 export async function updatePrescription(id: string, prescription: AdminPrescription): Promise<AdminPrescription> {
   await request(`/api/prescriptions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({
+    baseVersion: prescription.version,
     diagnosis: prescription.diagnosis, dialysisRx: prescription.dialysisRx, medications: prescription.medications,
     notes: prescription.notes, status: "Revised",
   }) }, "save");

@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
 import type { AdminPrescription, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
 import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, computeChangedFields, formatRxTimestamp } from "../../AdminApp";
-import { updatePrescription } from "../../lib/staffApi";
+import { updatePrescription, PrescriptionConflictError } from "../../lib/staffApi";
+import { PrescriptionConflict } from "../PrescriptionConflict";
 
 interface DoctorPrescriptionProps {
   onNavigate: (view: string) => void;
@@ -40,6 +41,8 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [showHistoryFor, setShowHistoryFor] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [savingRx, setSavingRx] = useState(false);
 
   const filtered = prescriptions.filter(rx =>
     rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
@@ -47,26 +50,29 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
   );
 
   function startEdit(rx: AdminPrescription) {
+    setConflict(false); setSaveError(null);
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setEditingId(rx.id);
     setShowHistoryFor(null);
   }
 
-  function cancelEdit() { setEditingId(null); setEditDraft(null); }
+  function cancelEdit() { setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null); }
 
   async function saveEdit() {
-    if (!editDraft) return;
+    if (!editDraft || savingRx || conflict) return;
     const original = prescriptions.find(p => p.id === editDraft.id);
     if (!original) return;
     const changed = computeChangedFields(original, editDraft);
+    setSavingRx(true);
     try {
       setSaveError(null);
       const saved = await updatePrescription(editDraft.id, editDraft);
       setPrescriptions(prev => prev.map(rx => rx.id === saved.id ? saved : rx));
     } catch (error) {
+      if (error instanceof PrescriptionConflictError) setConflict(true);
       setSaveError(error instanceof Error ? error.message : "Prescription could not be saved.");
       return;
-    }
+    } finally { setSavingRx(false); }
     addRxNotification({
       doctorName: doctorName || "Doctor",
       patientName: original.patientName,
@@ -197,22 +203,25 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                 <div className="border-t border-slate-100 px-5 pb-5">
                   {isEditing && draft ? (
                     /* ── EDIT MODE ── */
-                    <div className="space-y-5 mt-4">
+                    <fieldset disabled={savingRx} className="space-y-5 mt-4 min-w-0">
                       <div className="flex items-center justify-between mb-1">
                         <h3 className="text-sm font-bold text-blue-700 uppercase tracking-wider flex items-center gap-2">
                           <Edit2 className="w-3.5 h-3.5" /> Editing Prescription
                         </h3>
                         <div className="flex gap-2">
-                          <button onClick={cancelEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-semibold">
+                          <button disabled={savingRx} onClick={cancelEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-semibold">
                             <X className="w-3 h-3" /> Cancel
                           </button>
-                          <button onClick={saveEdit} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-semibold">
+                          <button disabled={savingRx || conflict} onClick={saveEdit} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-semibold disabled:opacity-50">
                             <Check className="w-3 h-3" /> Save Changes
                           </button>
                         </div>
                          {saveError && <p className="text-xs text-red-600">{saveError}</p>}
                       </div>
 
+                      {conflict && <PrescriptionConflict key={draft.id} draft={draft} onResolve={reviewed => {
+                        setEditDraft(reviewed); setConflict(false); setSaveError(null);
+                      }} />}
                       {/* Dialysis Rx */}
                       <div>
                         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
@@ -332,7 +341,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
                         />
                       </div>
-                    </div>
+                    </fieldset>
                   ) : (
                     /* ── VIEW MODE ── */
                     <div>

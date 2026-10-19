@@ -58,6 +58,13 @@ globalThis.fetch = async (url, options = {}) => {
     return response;
   }
   if (match && options.method === "PATCH") {
+    const row = rows.find(row => row.id === decodeURIComponent(match[1]));
+    const payload = JSON.parse(options.body);
+    assert.ok(Number.isSafeInteger(payload.baseVersion), "staff client must send the draft's base version");
+    assert.ok(!Object.hasOwn(payload, "version"), "base version is not clinical data");
+    if (row.version !== payload.baseVersion) return reply({
+      code: "PRESCRIPTION_VERSION_CONFLICT", currentVersion: row.version, error: "Newer prescription exists.",
+    }, 409);
     revise(decodeURIComponent(match[1]), "admin");
     return reply({ prescription: rows.find(row => row.id === match[1]) });
   }
@@ -101,7 +108,15 @@ let refreshFromSave;
 const onSave = () => { refreshFromSave = api.fetchPrescriptions(); };
 window.addEventListener("staff-data-changed", onSave);
 resetCalls();
-const saved = await api.updatePrescription("rx-42", second.prescriptions[42]);
+const staleDraft = structuredClone(second.prescriptions[42]);
+await assert.rejects(api.updatePrescription("rx-42", staleDraft), error =>
+  error instanceof api.PrescriptionConflictError && error.operation === "save" && error.currentVersion === 5);
+assert.deepEqual(staleDraft, second.prescriptions[42], "conflict must not change or rebase the draft");
+assert.equal(refreshFromSave, undefined, "failed save must not dispatch a success refresh");
+assert.equal(calls.length, 1, "conflict must not silently reload or retry");
+const reviewed = (await api.fetchPrescriptions()).find(row => row.id === "rx-42");
+resetCalls();
+const saved = await api.updatePrescription("rx-42", reviewed);
 await refreshFromSave;
 window.removeEventListener("staff-data-changed", onSave);
 assert.equal(saved.version, 6, "local saves immediately reload the new version");

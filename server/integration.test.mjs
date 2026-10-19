@@ -407,7 +407,7 @@ try {
   const doctorAfterOwnCreation = await expectStatus(request("/api/notifications", { cookie: doctor }), 200, "doctor notifications should remain role-scoped");
   assert.ok(!doctorAfterOwnCreation.notifications.some(n => n.message === "Prescription created" && n.detail.includes(`${run}-NEG`)), "the creating doctor must not receive their own creation notification");
   await expectStatus(request(`/api/prescriptions/${prescription.prescription.id}`, {
-    method: "PATCH", cookie: doctor, body: { notes: `${run} doctor revision` },
+    method: "PATCH", cookie: doctor, body: { baseVersion: 1, notes: `${run} doctor revision` },
   }), 200, "doctor should revise a prescription");
   const history = await expectStatus(request(`/api/prescriptions/${prescription.prescription.id}/history`, { cookie: admin }), 200, "prescription history should be readable");
   assert.equal(history.history.length, 2, "creation and revision must produce two immutable versions");
@@ -433,7 +433,7 @@ try {
   const doctorBeforeAdminRevision = await expectStatus(request("/api/notifications", { cookie: doctor }), 200, "doctor notifications should be readable");
   assert.ok(!doctorBeforeAdminRevision.notifications.some(n => n.message === "Prescription revised" && n.detail.includes(`${run}-NEG`)), "doctor must not see the admin-targeted revision notification");
   await expectStatus(request(`/api/prescriptions/${prescription.prescription.id}`, {
-    method: "PATCH", cookie: admin, body: { notes: `${run} admin revision` },
+    method: "PATCH", cookie: admin, body: { baseVersion: 2, notes: `${run} admin revision` },
   }), 200, "admin should revise a prescription");
   const prescriptionsAfterAdminEdit = await expectStatus(request("/api/prescriptions", { cookie: doctor }), 200, "revised prescription metadata should be synchronized across roles");
   const adminEditedPrescription = prescriptionsAfterAdminEdit.prescriptions.find(item => item.id === prescription.prescription.id);

@@ -5,7 +5,8 @@ import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
 import { logoutStaff } from "./lib/appointmentApi";
-import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, type SessionUpdatePayload } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { PrescriptionConflict } from "./components/PrescriptionConflict";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -3017,6 +3018,8 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   const [clinicalEditor, setClinicalEditor] = useState<Patient | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [savingRx, setSavingRx] = useState(false);
 
   const counts = (["Active", "Transplanted", "Expired", "Shifted", "Discontinued"] as TreatmentStatus[]).reduce(
     (acc, s) => ({ ...acc, [s]: patients.filter(p => p.treatmentStatus === s).length }), {} as Record<TreatmentStatus, number>
@@ -3032,21 +3035,24 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   }, [patients, filter, search]);
 
   const startEdit = (rx: AdminPrescription) => {
+    setConflict(false); setSaveError(null); setCreatingPatientId(null);
     setEditingRxId(rx.id);
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setExpandedId(rx.patientId);
   };
   const startCreate = (patient: Patient) => {
+    setConflict(false);
     setCreatingPatientId(patient.id);
     setEditingRxId(null);
     setEditDraft(blankPrescription(patient));
     setExpandedId(patient.id);
     setSaveError(null);
   };
-  const cancelEdit = () => { setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null); };
+  const cancelEdit = () => { setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null); setConflict(false); setSaveError(null); };
 
   const saveEdit = async () => {
-    if (!editDraft) return;
+    if (!editDraft || savingRx || conflict) return;
+    setSavingRx(true);
     try {
       setSaveError(null);
       const saved = creatingPatientId
@@ -3056,7 +3062,10 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
         ? [...prev.filter(rx => rx.patientId !== saved.patientId), saved]
         : prev.map(rx => rx.id === saved.id ? saved : rx));
       setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null);
-    } catch (error) { setSaveError(error instanceof Error ? error.message : "Prescription could not be saved."); }
+    } catch (error) {
+      if (error instanceof PrescriptionConflictError) setConflict(true);
+      setSaveError(error instanceof Error ? error.message : "Prescription could not be saved.");
+    } finally { setSavingRx(false); }
   };
 
   const updateRxScalar = (field: keyof Omit<RxDialysis, "dialysisDays">, value: string) => {
@@ -3309,7 +3318,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                       <textarea value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)} placeholder="Clinical notes (optional)" rows={3} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none mb-4" />
                       <div className="flex gap-3 justify-end">
                         <button onClick={cancelEdit} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-white text-sm font-semibold">Cancel</button>
-                        <button onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold"><Check className="w-4 h-4" /> Create Prescription</button>
+                        <button disabled={savingRx} onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold"><Check className="w-4 h-4" /> Create Prescription</button>
                       </div>
                       {saveError && <p className="mt-2 text-xs text-red-600 text-right">{saveError}</p>}
                     </div>
@@ -3323,7 +3332,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                     </div>
                   ) : isEditing && draft ? (
                     /* ── Edit mode ── */
-                    <div className="px-5 pb-5 border-t border-slate-100 bg-violet-50/30">
+                    <fieldset disabled={savingRx} className="px-5 pb-5 border-t border-slate-100 bg-violet-50/30 min-w-0">
                       <div className="pt-4 mb-4 flex items-center justify-between flex-wrap gap-2">
                         <h3 className="text-xs font-bold text-violet-700 uppercase tracking-widest flex items-center gap-2">
                           <Edit3 className="w-3.5 h-3.5" /> Editing Prescription
@@ -3331,6 +3340,9 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         <span className="text-[10px] text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200">Previous version will be archived</span>
                       </div>
 
+                      {conflict && <PrescriptionConflict key={draft.id} draft={draft} onResolve={reviewed => {
+                        setEditDraft(reviewed); setConflict(false); setSaveError(null);
+                      }} />}
                       {/* Dialysis Rx edit fields */}
                       <div className="space-y-3 mb-5">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Dialysis Prescription</p>
@@ -3428,12 +3440,12 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
 
                       <div className="flex gap-3 justify-end">
                         <button onClick={cancelEdit} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-white text-sm font-semibold">Cancel</button>
-                        <button onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold shadow-md shadow-violet-200">
+                        <button disabled={savingRx || conflict} onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold shadow-md shadow-violet-200 disabled:opacity-50">
                           <Check className="w-4 h-4" /> Save Prescription
                         </button>
                       </div>
                       {saveError && <p className="mt-2 text-xs text-red-600 text-right">{saveError}</p>}
-                    </div>
+                    </fieldset>
                   ) : (
                     /* ── View mode ── */
                     <>

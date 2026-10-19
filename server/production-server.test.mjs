@@ -68,6 +68,7 @@ try {
   assert.match(html, /id=["']root["']/i, "production root should serve built application HTML");
   assert.ok(!html.includes("/@vite/client"), "production HTML must not include the Vite development client");
   await runProductionIntegration(`http://127.0.0.1:${port}`);
+  await runProductionIntegration(`http://127.0.0.1:${port}`, "server/prescription-concurrency.test.mjs");
   await runProductionIntegration(`http://127.0.0.1:${port}`, "server/staff-gaps.test.mjs");
   console.log("production server smoke test passed");
 } finally {
