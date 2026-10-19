@@ -41,6 +41,13 @@ export class PrescriptionConflictError extends StaffApiError {
   }
 }
 
+export class ClinicalNoteConflictError extends StaffApiError {
+  constructor(message: string, public currentVersion: number) {
+    super(message, "save");
+    this.name = "ClinicalNoteConflictError";
+  }
+}
+
 async function request<T>(url: string, options: RequestInit = {}, operation: "load" | "save" = "load"): Promise<T> {
   let response: Response;
   try {
@@ -50,6 +57,9 @@ async function request<T>(url: string, options: RequestInit = {}, operation: "lo
   }
   const body = await response.json().catch(() => null) as { error?: string; code?: string; currentVersion?: number } | null;
   if (!response.ok) {
+    if (response.status === 409 && body?.code === "CLINICAL_NOTE_VERSION_CONFLICT") {
+      throw new ClinicalNoteConflictError(body.error || "This clinical note has a newer version.", body.currentVersion!);
+    }
     if (response.status === 409 && body?.code === "PRESCRIPTION_VERSION_CONFLICT") {
       throw new PrescriptionConflictError(body.error || "This prescription has a newer version.", body.currentVersion!);
     }
@@ -310,11 +320,11 @@ export async function updatePrescription(id: string, prescription: AdminPrescrip
   return saved;
 }
 
-export interface ClinicalNoteDto { id: string; patient_id: string; body: string; created_at: string; updated_at?: string; author_name?: string; data?: { title?: string; noteType?: string; vitals?: Record<string,string> }; }
+export interface ClinicalNoteDto { id: string; patient_id: string; version: number; body: string; created_at: string; updated_at?: string; author_name?: string; data?: { title?: string; noteType?: string; vitals?: Record<string,string> }; }
 export const fetchClinicalNotes = (patientId: string) => request<{ notes: ClinicalNoteDto[] }>(`/api/patients/${encodeURIComponent(patientId)}/clinical-notes`);
 export const fetchAllClinicalNotes = () => request<{ notes: ClinicalNoteDto[] }>("/api/clinical-notes");
 export const createClinicalNote = (patientId: string, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>("/api/clinical-notes", { method: "POST", body: JSON.stringify({ patientId, body, data }) }, "save");
-export const updateClinicalNote = (id: string, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>(`/api/clinical-notes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ body, data }) }, "save");
+export const updateClinicalNote = (id: string, baseVersion: number, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>(`/api/clinical-notes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ baseVersion, body, data }) }, "save");
 export const updatePatient = async (id: string, changes: Partial<Patient>) => {
   const r = await request<{ patient: Partial<Patient> }>(`/api/patients/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
   return asPatient(r.patient);

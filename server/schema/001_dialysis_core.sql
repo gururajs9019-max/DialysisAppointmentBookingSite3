@@ -127,6 +127,7 @@ ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS profile jsonb NOT NULL DEFAULT
 ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE clinical_notes ADD COLUMN IF NOT EXISTS data jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE clinical_notes ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE clinical_notes ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1 CHECK (version > 0);
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS patient_id text REFERENCES patients(id);
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS record_id text;
 ALTER TABLE patients DROP CONSTRAINT IF EXISTS patients_lifecycle_check;

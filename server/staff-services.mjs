@@ -125,6 +125,15 @@ export function staffServices(ctx) {
         const old=req.method==="PATCH"?(await c.query("SELECT * FROM clinical_notes WHERE id=$1 FOR UPDATE",[id])).rows[0]:null;
         if(req.method==="PATCH"&&!old) throw httpError(404,"Clinical note was not found.");
         if(old&&actor.role!=="admin"&&old.author_id!==actor.id) throw httpError(403,"Only the author or an administrator may edit this note.");
+        if(old) {
+          if(!Number.isSafeInteger(x.baseVersion)||x.baseVersion<1) throw httpError(400,"A positive integer baseVersion is required.");
+          if(x.baseVersion!==old.version) {
+            const error=httpError(409,"Another staff member saved a newer clinical note. Your draft has not been saved. Review the newer note before trying again.");
+            error.code="CLINICAL_NOTE_VERSION_CONFLICT";
+            error.currentVersion=old.version;
+            throw error;
+          }
+        }
         const patient=await fetchPatient(c,old?.patient_id||text(x.patientId,"patientId",{required:true}));
         const body=text(x.body,"note",{required:true,max:10000});
         const data={...old?.data,...x.data};
@@ -132,7 +141,7 @@ export function staffServices(ctx) {
           const linked=(await c.query("SELECT patient_id FROM dialysis_sessions WHERE id=$1",[text(x.sessionId,"sessionId",{required:true})])).rows[0];
           if(!linked||linked.patient_id!==patient.id) throw httpError(400,"Clinical-note session must belong to this patient.");
         }
-        const r=old?await c.query("UPDATE clinical_notes SET body=$2,data=$3,updated_at=now() WHERE id=$1 RETURNING *",[id,body,data])
+        const r=old?await c.query("UPDATE clinical_notes SET body=$2,data=$3,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[id,body,data])
           :await c.query("INSERT INTO clinical_notes(id,patient_id,body,author_id,data,session_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[id,patient.id,body,actor.id,data,x.sessionId||null]);
         await audit(c,actor,old?"note.update":"note.create","clinical_note",id,{before:old,after:r.rows[0]});
         await notifyRole(c,actor,actor.role==="doctor"?"admin":"doctor","info","Clinical note updated",

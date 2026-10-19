@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { FileText, Plus, Search, User, Edit, Trash2, X, ChevronDown, Check } from "lucide-react";
 import type { Patient } from "../../AdminApp";
-import { createClinicalNote, fetchClinicalNotes, fetchAllClinicalNotes, updateClinicalNote } from "../../lib/staffApi";
+import { createClinicalNote, fetchClinicalNotes, fetchAllClinicalNotes, updateClinicalNote, ClinicalNoteConflictError } from "../../lib/staffApi";
+import { ClinicalNoteConflict } from "./ClinicalNoteConflict";
 
 interface ClinicalNotesProps {
   onNavigate: (view: string) => void;
@@ -17,6 +18,7 @@ interface NoteVitals {
 
 interface Note {
   id: string;
+  version: number;
   patientName: string;
   patientId: string;
   patientUhid: string;
@@ -161,6 +163,8 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   const [selectedNote, setSelectedNote] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [baseVersion, setBaseVersion] = useState<number | null>(null);
+  const [conflict, setConflict] = useState(false);
 
   // Form state
   const [formPatient, setFormPatient] = useState<Patient | null>(null);
@@ -184,7 +188,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
       setNotes(result.notes.map(note => {
         const owner = patient || patients.find(p=>p.id===note.patient_id);
         return {
-          id: note.id, patientName: owner?.name || "Patient", patientId: note.patient_id, patientUhid: owner?.uhid || "",
+          id: note.id, version: note.version, patientName: owner?.name || "Patient", patientId: note.patient_id, patientUhid: owner?.uhid || "",
           date: note.updated_at || note.created_at, noteType: note.data?.noteType || "general",
           title: note.data?.title || "Clinical Note", content: note.body, author: note.author_name || "Staff",
           vitals: note.data?.vitals as unknown as NoteVitals,
@@ -204,6 +208,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
 
   function resetForm() {
     setEditingId(null);
+    setBaseVersion(null); setConflict(false); setSaveError(null);
     setFormPatient(null);
     setFormNoteType("session");
     setFormTitle("");
@@ -227,16 +232,22 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
       return;
     }
     try {
-      if (saving) return;
+      if (saving || conflict) return;
       setSaving(true);
       setSaveError(null);
       const data = { title: formTitle || "Clinical Note", noteType: formNoteType,
         vitals: { bloodPressure: formBP, heartRate: formHR, weight: formWeight, temperature: formTemp } };
-      if (editingId) await updateClinicalNote(editingId, formContent, data);
+      if (editingId) {
+        if (baseVersion === null) throw new Error("Reopen the note before editing.");
+        await updateClinicalNote(editingId, baseVersion, formContent, data);
+      }
       else await createClinicalNote(formPatient.id, formContent, data);
       await loadNotes(formPatient);
       resetForm(); setShowAddForm(false);
-    } catch (error) { setSaveError(error instanceof Error ? error.message : "Clinical note could not be saved."); }
+    } catch (error) {
+      if (error instanceof ClinicalNoteConflictError) setConflict(true);
+      setSaveError(error instanceof Error ? error.message : "Clinical note could not be saved.");
+    }
     finally { setSaving(false); }
   }
 
@@ -268,6 +279,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
             <p className="text-blue-100">Document and track patient treatment notes</p>
           </div>
           <button
+            disabled={saving}
             onClick={() => { resetForm(); setShowAddForm(!showAddForm); }}
             className="flex items-center gap-2 px-4 py-2 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-medium"
           >
@@ -282,18 +294,29 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
         <div className="bg-white rounded-lg shadow-lg p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">{editingId ? "Edit Clinical Note" : "New Clinical Note"}</h2>
           <form className="space-y-4" onSubmit={handleSaveNote}>
+            <fieldset disabled={saving} className="space-y-4 min-w-0">
+            {conflict && editingId && formPatient && <ClinicalNoteConflict key={editingId}
+              id={editingId} patientId={formPatient.id}
+              draft={{ body: formContent, title: formTitle, noteType: formNoteType, bloodPressure: formBP,
+                heartRate: formHR, weight: formWeight, temperature: formTemp }}
+              onResolve={(reviewed, version) => {
+                setFormContent(reviewed.body); setFormTitle(reviewed.title); setFormNoteType(reviewed.noteType);
+                setFormBP(reviewed.bloodPressure); setFormHR(reviewed.heartRate);
+                setFormWeight(reviewed.weight); setFormTemp(reviewed.temperature);
+                setBaseVersion(version); setConflict(false); setSaveError(null);
+              }} />}
             <div className="grid md:grid-cols-2 gap-4">
               {/* Searchable patient selector */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Patient <span className="text-red-500">*</span>
                 </label>
-                <PatientSearchSelect
+                {editingId ? <p className="px-3 py-2 text-sm text-gray-800">{formPatient?.name} ({formPatient?.uhid})</p> : <PatientSearchSelect
                   value={formPatient}
                   onChange={p => { setFormPatient(p); setPatientError(false); }}
                   error={patientError}
                   patients={patients}
-                />
+                />}
                 {patientError && (
                   <p className="mt-1 text-xs text-red-500">Please select a patient.</p>
                 )}
@@ -385,7 +408,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
             <div className="flex gap-3 pt-4">
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || conflict}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
               >
                 Save Note
@@ -399,6 +422,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
               </button>
             </div>
             {saveError && <p className="text-sm text-red-600">{saveError}</p>}
+            </fieldset>
           </form>
         </div>
       )}
@@ -466,10 +490,11 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
               </div>
               <div className="flex gap-2">
                 <button
+                  disabled={saving}
                   className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
                   title="Edit clinical note"
                   onClick={e => {
-                    e.stopPropagation(); setEditingId(note.id);
+                    e.stopPropagation(); setEditingId(note.id); setBaseVersion(note.version); setConflict(false);
                     setFormPatient(patients.find(p=>p.id===note.patientId)||null);
                     setFormTitle(note.title); setFormContent(note.content); setFormNoteType(note.noteType);
                     setFormBP(note.vitals?.bloodPressure||""); setFormHR(note.vitals?.heartRate||"");

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { chromium } from "playwright";
+import { verifyClinicalNoteConflicts } from "./clinical-note-conflicts.test-helper.mjs";
 
 const base = process.env.TEST_BASE_URL || "http://127.0.0.1:5000";
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -43,7 +44,8 @@ async function verifySavedNotesInBrowser(email,password,patient,noteId,cookie) {
     await signIn();
     await page.getByRole("heading",{name:`${run} browser reviewed`,exact:true}).click();
     await page.getByText(`${run} saved in browser`,{exact:true}).waitFor();
-    await req(`/api/clinical-notes/${noteId}`,cookie,"PATCH",{body:`${run} synchronized note`,data:{title:`${run} synchronized`}});
+    const current=(await req("/api/clinical-notes",cookie)).notes.find(note=>note.id===noteId);
+    await req(`/api/clinical-notes/${noteId}`,cookie,"PATCH",{baseVersion:current.version,body:`${run} synchronized note`,data:{title:`${run} synchronized`}});
     await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
     await page.getByRole("heading",{name:`${run} synchronized`,exact:true}).waitFor();
     await page.goto(base);
@@ -98,7 +100,8 @@ try {
     data:{title:"Assessment",noteType:"assessment",vitals:{bloodPressure:"120/80",weight:"60"}}},201)).note;
   ids.notes.push(note.id);
   await req(`/api/clinical-notes/${note.id}`,doctor,"PATCH",{body:"Not my note"},403);
-  await req(`/api/clinical-notes/${note.id}`,newDoctor,"PATCH",{body:"Revised assessment",data:{title:`${run} reviewed`,vitals:{bloodPressure:"125/80",weight:"61"}}});
+  assert.equal(note.version,1,"new clinical notes start at version 1");
+  await req(`/api/clinical-notes/${note.id}`,newDoctor,"PATCH",{baseVersion:note.version,body:"Revised assessment",data:{title:`${run} reviewed`,vitals:{bloodPressure:"125/80",weight:"61"}}});
   const reloaded=(await req("/api/clinical-notes",doctor)).notes.find(n=>n.id===note.id);
   assert.equal(reloaded.body,"Revised assessment");
   assert.equal(reloaded.data.title,`${run} reviewed`);
@@ -141,6 +144,8 @@ try {
   assert.equal(change.metadata.actorRole,"admin");
   assert.ok(audits.some(a=>a.entity_id===note.id&&a.metadata.before?.body==="Original assessment"));
   await verifySavedNotesInBrowser(account.email,password,patient,note.id,newDoctor);
+  await verifyClinicalNoteConflicts({ base, db, admin, author:newDoctor, otherDoctor:doctor, patient,
+    noteId:note.id, email:account.email, password, run });
   await req(`/api/users/${account.id}`,admin,"PATCH",{status:"Inactive"});
   await req("/api/auth/me",newDoctor,"GET",undefined,401);
   await login("doctor",account.email,password,401);
