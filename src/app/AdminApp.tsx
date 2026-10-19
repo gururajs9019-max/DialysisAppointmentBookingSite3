@@ -4385,11 +4385,6 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             <RegErrMsg error={errors.name} />
           </div>
 
-          <div>
-            <label className={labelCls}>UHID</label>
-            <input className={fldCls(false)} placeholder="Auto-generated if blank" />
-          </div>
-
           <div ref={refs.age}>
             <label className={labelCls}>Age *</label>
             <input type="number" min={1} value={age} onChange={e => setAge(e.target.value)}

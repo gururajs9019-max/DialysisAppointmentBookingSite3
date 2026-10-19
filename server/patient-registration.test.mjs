@@ -52,6 +52,8 @@ try {
   const field = label => page.getByText(label, { exact: true }).locator("..").locator("input, select").first();
   await openAdmin("Register Patient");
   await expect(page.getByRole("heading", { name: "Register New Patient", exact: true })).toBeVisible();
+  await expect(page.getByText("UHID", { exact: true })).toHaveCount(0);
+  await expect(page.getByPlaceholder("Auto-generated if blank", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Cause of Failure", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Treating Nephrologist *", { exact: true })).toHaveCount(0);
   const numericCount = await page.locator('input[type="number"]').count();
@@ -110,6 +112,7 @@ try {
   const response = await createdResponse;
   assert.equal(response.status(), 201);
   const created = (await response.json()).patient;
+  assert.match(created.uhid, /^KMCRI-\d+$/, "registration retains the automatic identifier used by existing records and lookups");
   await expect(page.getByRole("heading", { name: "Patient Registered", exact: true })).toBeVisible();
   let persisted = (await api(`/api/patients/${created.id}`, admin)).patient;
   assert.equal(persisted.medicalInfo.dryWeight, 52.5);
