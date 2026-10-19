@@ -25,6 +25,9 @@ let visibleRows = rows;
 let failHistory = null;
 let failList = null;
 let holdHistory = null;
+let incompleteHistory = false;
+let activeHistoryRequests = 0;
+let maxHistoryRequests = 0;
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status });
 function revise(id, role) {
   const row = rows.find(item => item.id === id);
@@ -38,25 +41,36 @@ function revise(id, role) {
   });
 }
 globalThis.fetch = async (url, options = {}) => {
-  calls.push({ url, method: options.method || "GET" });
+  calls.push({ url, method: options.method || "GET", body: options.body && JSON.parse(options.body) });
   if (url === "/api/prescriptions") {
     if (failList) { const status = failList; failList = null; return reply({ error: "Session expired." }, status); }
     return reply({ prescriptions: visibleRows });
   }
-  const match = url.match(/^\/api\/prescriptions\/([^/]+)(\/history)?$/);
-  if (match?.[2]) {
-    const id = decodeURIComponent(match[1]);
-    if (failHistory === id) { failHistory = null; return reply({ error: "History unavailable." }, 503); }
-    const response = reply({ history: histories.get(id) });
-    if (holdHistory?.id === id) {
-      const hold = holdHistory;
-      holdHistory = null;
-      hold.started();
-      await hold.wait;
-      if (hold.fail) return reply({ error: "Older history failed." }, 503);
+  if (url === "/api/prescription-histories") {
+    activeHistoryRequests++;
+    maxHistoryRequests = Math.max(maxHistoryRequests, activeHistoryRequests);
+    try {
+      const requested = JSON.parse(options.body).prescriptions;
+      if (requested.some(row => row.id === failHistory)) { failHistory = null; return reply({ error: "History unavailable." }, 503); }
+      const returned = incompleteHistory ? requested.slice(1) : requested;
+      incompleteHistory = false;
+      const response = reply({ histories: returned.map(({ id, version }) => ({
+        prescriptionId: id, history: histories.get(id).filter(row => row.version < version),
+      })) });
+      await new Promise(resolve => setImmediate(resolve));
+      if (holdHistory && requested.some(row => row.id === holdHistory.id)) {
+        const hold = holdHistory;
+        holdHistory = null;
+        hold.started();
+        await hold.wait;
+        if (hold.fail) return reply({ error: "Older history failed." }, 503);
+      }
+      return response;
+    } finally {
+      activeHistoryRequests--;
     }
-    return response;
   }
+  const match = url.match(/^\/api\/prescriptions\/([^/]+)$/);
   if (match && options.method === "PATCH") {
     const row = rows.find(row => row.id === decodeURIComponent(match[1]));
     const payload = JSON.parse(options.body);
@@ -76,12 +90,13 @@ globalThis.fetch = async (url, options = {}) => {
   assert.ok(data[url], `Unexpected request: ${url}`);
   return reply(data[url]);
 };
-const historyCalls = () => calls.filter(call => call.url.endsWith("/history"));
+const historyCalls = () => calls.filter(call => call.url === "/api/prescription-histories");
 const resetCalls = () => { calls = []; };
 
 const first = await api.loadStaffData();
-assert.equal(calls.length, count + 7, "initial load fetches each history once plus seven staff collections");
-assert.equal(historyCalls().length, count);
+assert.equal(calls.length, 8, "initial load uses seven staff collections and one history batch, not one request per prescription");
+assert.equal(historyCalls().length, 1);
+assert.equal(historyCalls()[0].body.prescriptions.length, count, "cold load batches the entire large prescription list");
 assert.deepEqual(first.prescriptions[0].history.map(row => row.version), [2, 1], "exclude current version and preserve comparison ordering");
 assert.equal(first.prescriptions[0].history[1].updatedByRole, "admin");
 assert.equal(first.prescriptions[0].history[0].updatedBy, "Doctor");
@@ -97,7 +112,7 @@ for (const role of ["doctor", "admin"]) {
   resetCalls();
   const changed = await api.loadStaffData();
   assert.equal(calls.length, 8, "external revision reloads only its history");
-  assert.deepEqual(historyCalls().map(call => call.url), ["/api/prescriptions/rx-42/history"]);
+  assert.deepEqual(historyCalls()[0].body.prescriptions, [{ id: "rx-42", version: role === "doctor" ? 4 : 5 }]);
   const row = changed.prescriptions.find(row => row.id === "rx-42");
   assert.equal(row.updatedByRole, role, "latest authenticated metadata must come from the current list");
   assert.equal(row.history.length, row.version - 1);
@@ -127,7 +142,7 @@ assert.equal(saved.history[1].updatedByRole, "doctor");
 api.clearPrescriptionHistoryCache();
 resetCalls();
 await Promise.all([api.fetchPrescriptions(), api.fetchPrescriptions()]);
-assert.equal(historyCalls().length, count, "concurrent cold refreshes share in-flight histories");
+assert.equal(historyCalls().length, 1, "concurrent cold refreshes share one in-flight history batch");
 
 revise("rx-10", "doctor");
 failHistory = "rx-10";
@@ -139,10 +154,12 @@ failList = 401;
 await assert.rejects(api.fetchPrescriptions(), /Session expired/);
 resetCalls();
 await api.fetchPrescriptions();
-assert.equal(historyCalls().length, count, "expired authorization clears all cached clinical histories");
+assert.equal(historyCalls().length, 1, "expired authorization clears all cached clinical histories and reloads them in one batch");
+assert.equal(historyCalls()[0].body.prescriptions.length, count);
 
 for (const fail of [false, true]) {
   // An older completion must not overwrite or evict a newer revision's cache.
+  visibleRows = rows.slice(0, 1);
   api.clearPrescriptionHistoryCache();
   let started, release;
   const start = new Promise(resolve => { started = resolve; });
@@ -161,6 +178,8 @@ for (const fail of [false, true]) {
   assert.deepEqual(latest[0].history, newer[0].history);
 }
 
+visibleRows = rows;
+await api.fetchPrescriptions();
 visibleRows = rows.slice(1);
 await api.fetchPrescriptions();
 visibleRows = rows;
@@ -170,7 +189,39 @@ assert.equal(historyCalls().length, 1, "records absent from the list are evicted
 api.clearPrescriptionHistoryCache();
 resetCalls();
 await api.fetchPrescriptions();
-assert.equal(historyCalls().length, count, "a new staff session starts with fresh histories");
+assert.equal(historyCalls().length, 1, "a new staff session starts with fresh histories in one batch");
+assert.equal(historyCalls()[0].body.prescriptions.length, count);
+
+api.clearPrescriptionHistoryCache();
+incompleteHistory = true;
+await assert.rejects(api.loadStaffData(), /Prescription history response was incomplete/);
+resetCalls();
+await api.loadStaffData();
+assert.equal(historyCalls()[0].body.prescriptions.length, count, "incomplete batches fail visibly and are retried, never cached as empty histories");
+
+// Exercise a cold list larger than one batch, with substantial immutable history.
+visibleRows = Array.from({ length: 1200 }, (_, index) => ({
+  id: `large-rx-${index}`, patientId: `large-patient-${index}`, version: 41,
+  notes: "current version", dialysisRx: { duration: "4 Hours" }, medications: [],
+}));
+for (const row of visibleRows) {
+  histories.set(row.id, Array.from({ length: 40 }, (_, index) => ({
+    version: index + 1, changed_by_name: "Doctor", changed_by_role: "doctor",
+    snapshot: { notes: `historical ${index + 1}`, dialysisRx: { duration: "3 Hours" }, medications: [] },
+  })));
+}
+api.clearPrescriptionHistoryCache();
+resetCalls();
+maxHistoryRequests = 0;
+const largeLoad = await api.loadStaffData();
+assert.equal(historyCalls().length, 3, "1200 prescriptions use three bounded batches rather than 1200 requests");
+assert.ok(historyCalls().every(call => call.body.prescriptions.length <= 500));
+assert.equal(maxHistoryRequests, 2, "large loads limit concurrent history requests to two");
+assert.ok(largeLoad.prescriptions.every(row => row.history.length === 40), "all 48000 prior snapshots remain available to staff history views");
+assert.deepEqual(largeLoad.prescriptions[0].history.map(row => row.version), Array.from({ length: 40 }, (_, index) => 40 - index));
+resetCalls();
+await api.loadStaffData();
+assert.equal(historyCalls().length, 0, "large histories still reuse the version-aware cache");
 
 // Exercise the real synchronization effect with controllable refresh responses.
 const syncSource = (await readFile(new URL("../src/app/lib/useStaffSync.ts", import.meta.url), "utf8"))
@@ -219,4 +270,4 @@ const disposedLoads = syncLoads;
 window.dispatchEvent(new Event("staff-data-changed"));
 assert.equal(syncLoads, disposedLoads, "unmounted portal removes refresh listeners");
 
-console.log("staff prescription cache tests passed (120 prescriptions, revision invalidation, concurrency, isolation, errors)");
+console.log("staff prescription cache tests passed (1200 prescriptions, 48000 snapshots, bounded batches, revision invalidation, concurrency, isolation, errors)");

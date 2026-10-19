@@ -212,31 +212,44 @@ export async function fetchPrescriptions(): Promise<AdminPrescription[]> {
   }
 
   if (pending.length) {
-    request<{ histories: Array<{ prescriptionId: string; history: Record<string, any>[] }> }>(
-      "/api/prescription-histories",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          prescriptions: pending.map(({ prescription, entry }) => ({
-            id: prescription.id,
-            version: entry.version,
-          })),
-        }),
-      },
-    ).then(result => {
-      if (!Array.isArray(result.histories)) throw new StaffApiError("Prescription history response was invalid.", "load");
-      const byId = new Map(result.histories.map(item => [item.prescriptionId, item.history]));
-      if (pending.some(({ prescription }) => !Array.isArray(byId.get(prescription.id)))) {
-        throw new StaffApiError("Prescription history response was incomplete.", "load");
+    // Bound both query size and concurrency for very large first-time loads.
+    const batches: Array<typeof pending> = [];
+    for (let offset = 0; offset < pending.length; offset += 500) batches.push(pending.slice(offset, offset + 500));
+    let nextBatch = 0;
+    let failed = false;
+    const loadBatches = async () => {
+      while (!failed && nextBatch < batches.length) {
+        const batch = batches[nextBatch++];
+        try {
+          const result = await request<{ histories: Array<{ prescriptionId: string; history: Record<string, any>[] }> }>(
+            "/api/prescription-histories",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                prescriptions: batch.map(({ prescription, entry }) => ({
+                  id: prescription.id, version: entry.version,
+                })),
+              }),
+            },
+          );
+          if (!Array.isArray(result.histories)) throw new StaffApiError("Prescription history response was invalid.", "load");
+          const byId = new Map<string, Record<string, any>[]>(result.histories.map(item => [item.prescriptionId, item.history]));
+          if (batch.some(({ prescription }) => !Array.isArray(byId.get(prescription.id)))) {
+            throw new StaffApiError("Prescription history response was incomplete.", "load");
+          }
+          for (const { prescription, entry, resolve } of batch) {
+            resolve(byId.get(prescription.id)!
+              .filter(row => Number(row.version) < entry.version)
+              .map(asHistory)
+              .sort((a, b) => b.version - a.version));
+          }
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
-      for (const { prescription, entry, resolve } of pending) {
-        const rows = byId.get(prescription.id);
-        resolve(rows
-          .filter(row => Number(row.version) < entry.version)
-          .map(asHistory)
-          .sort((a, b) => b.version - a.version));
-      }
-    }).catch(error => {
+    };
+    Promise.all(Array.from({ length: Math.min(2, batches.length) }, loadBatches)).catch(error => {
       for (const item of pending) item.reject(error);
     });
   }

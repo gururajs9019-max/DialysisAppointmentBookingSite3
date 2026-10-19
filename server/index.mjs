@@ -219,14 +219,14 @@ async function api(req, res, url) {
     if (req.method === "POST" && path === "/api/prescription-histories") {
       await requireStaff(req);
       const payload = object(await readJson(req));
-      if (!Array.isArray(payload.prescriptions) || payload.prescriptions.length > 5000) {
-        throw httpError(400, "prescriptions must be a list of at most 5000 records.");
+      if (!Array.isArray(payload.prescriptions) || payload.prescriptions.length > 500) {
+        throw httpError(400, "prescriptions must be a list of at most 500 records.");
       }
       const requested = new Map();
       for (const value of payload.prescriptions) {
         const item = object(value, "prescription");
         const id = text(item.id, "prescription id", { required: true, max: 200 });
-        if (!Number.isSafeInteger(item.version) || item.version < 1) {
+        if (!Number.isSafeInteger(item.version) || item.version < 1 || item.version > 2147483647) {
           throw httpError(400, "Each prescription requires a positive integer version.");
         }
         requested.set(id, Math.max(requested.get(id) || 0, item.version));
@@ -236,7 +236,7 @@ async function api(req, res, url) {
         const rows = await pool.query(`
           WITH requested AS (
             SELECT id, version
-            FROM jsonb_to_recordset($1::jsonb) AS record(id text, version integer)
+            FROM jsonb_to_recordset($1::jsonb) AS requested_row(id text, version integer)
           )
           SELECT pv.prescription_id, pv.version, pv.snapshot, pv.created_at,
                  pv.changed_by, u.name changed_by_name, u.role changed_by_role

@@ -56,13 +56,15 @@ async function runBrowserPrescriptionCacheTest(prescriptionId, adminCookie, doct
       await context.addCookies([{ name: cookie.slice(0, separator), value: cookie.slice(separator + 1), url: baseUrl }]);
       const page = pages[role] = await context.newPage();
       page.on("request", req => {
-        if (new URL(req.url()).pathname.match(/^\/api\/prescriptions\/[^/]+\/history$/)) counts[role].push(req.url());
+        if (new URL(req.url()).pathname === "/api/prescription-histories") counts[role].push(req.postDataJSON().prescriptions.length);
       });
       await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
       await page.evaluate(async url => { globalThis.staffApiTest = await import(url); }, moduleUrl);
-      await page.evaluate(async () => {
-        await globalThis.staffApiTest.loadStaffData();
+      const coldCount = await page.evaluate(async () => {
+        return (await globalThis.staffApiTest.loadStaffData()).prescriptions.length;
       });
+      assert.equal(counts[role].length, Math.ceil(coldCount / 500), `${role} cold load uses bounded history batches`);
+      assert.equal(counts[role].reduce((total, count) => total + count, 0), coldCount, "cold batch covers every prescription exactly once");
       counts[role] = [];
       await page.evaluate(async () => {
         await globalThis.staffApiTest.loadStaffData();
@@ -83,11 +85,11 @@ async function runBrowserPrescriptionCacheTest(prescriptionId, adminCookie, doct
         const draft = (await api.fetchPrescriptions()).find(row => row.id === id);
         return api.updatePrescription(id, { ...draft, notes, updatedBy: "Untrusted name", updatedByRole: "Untrusted role" });
       }, { id: prescriptionId, notes });
-      assert.equal(counts[role].length, 1, `${role} save reloads only the revised history`);
+      assert.deepEqual(counts[role], [1], `${role} save reloads only the revised history`);
       assert.equal(saved.updatedByRole, role, "save author must remain server-authenticated");
       assert.notEqual(saved.updatedBy, "Untrusted name");
       const refreshed = await read(pages[peer]);
-      assert.equal(counts[peer].length, 1, `${peer} detects the other portal's revision from the list version`);
+      assert.deepEqual(counts[peer], [1], `${peer} detects the other portal's revision from the list version`);
       assert.equal(refreshed.version, saved.version);
       assert.equal(refreshed.notes, notes);
       assert.deepEqual(refreshed.history, saved.history, "both portals must see identical immutable history");
@@ -413,6 +415,17 @@ try {
   assert.equal(history.history.length, 2, "creation and revision must produce two immutable versions");
   assert.equal(history.history[0].changed_by_role, "doctor", "prescription history must identify the creation role");
   assert.equal(history.history[1].changed_by_role, "doctor", "prescription history must identify the editing role");
+  const batchBody = { prescriptions: [{ id: prescription.prescription.id, version: 2 }] };
+  await expectStatus(request("/api/prescription-histories", { method: "POST", body: batchBody }), 401, "batch histories require staff authentication");
+  await expectStatus(request("/api/prescription-histories", {
+    method: "POST", cookie: admin, body: { prescriptions: [{ id: prescription.prescription.id, version: "2" }] },
+  }), 400, "batch histories reject invalid versions");
+  const batch = await expectStatus(request("/api/prescription-histories", {
+    method: "POST", cookie: admin, body: batchBody,
+  }), 200, "batch histories should be readable");
+  assert.deepEqual(batch.histories[0].history.map(row => row.version), [1], "batch excludes the current snapshot");
+  assert.equal(batch.histories[0].prescriptionId, prescription.prescription.id);
+  assert.deepEqual(batch.histories[0].history[0].snapshot, history.history[0].snapshot, "batch preserves immutable clinical snapshots");
   const prescriptionsAfterDoctorEdit = await expectStatus(request("/api/prescriptions", { cookie: admin }), 200, "prescription details should be readable");
   const doctorEditedPrescription = prescriptionsAfterDoctorEdit.prescriptions.find(item => item.id === prescription.prescription.id);
   assert.equal(doctorEditedPrescription.createdByRole, "doctor", "prescription list must expose the authenticated creator role");
@@ -422,6 +435,18 @@ try {
     body: { patientId: second.patient.id, diagnosis: `${run} administrator diagnosis`, dialysisRx: { duration: "4 Hours" }, medications: [], notes: "created by administrator" },
   }), 201, "admin should create a prescription");
   ids.prescriptions.push(adminPrescription.prescription.id);
+  const combinedBatch = await expectStatus(request("/api/prescription-histories", {
+    method: "POST", cookie: doctor,
+    body: { prescriptions: [
+      { id: prescription.prescription.id, version: 2 },
+      { id: adminPrescription.prescription.id, version: 1 },
+    ] },
+  }), 200, "doctors can batch histories from both staff roles");
+  assert.equal(combinedBatch.histories.length, 2);
+  assert.deepEqual(combinedBatch.histories.find(row => row.prescriptionId === adminPrescription.prescription.id).history, [], "new prescriptions have an explicit empty prior history");
+  await expectStatus(request("/api/prescription-histories", {
+    method: "POST", cookie: admin, body: { prescriptions: Array.from({ length: 501 }, () => batchBody.prescriptions[0]) },
+  }), 400, "batch history queries have a bounded input size");
   const doctorAfterAdminCreation = await expectStatus(request("/api/notifications", { cookie: doctor }), 200, "doctor should receive administrator creation notifications");
   assert.ok(doctorAfterAdminCreation.notifications.some(n => n.message === "Prescription created" && n.detail.includes(`${run}-SECOND`)), "administrator-created prescriptions must notify doctors");
   const adminAfterOwnCreation = await expectStatus(request("/api/notifications", { cookie: admin }), 200, "administrator notifications should remain role-scoped");

@@ -1,10 +1,10 @@
 ---
 name: Staff history loading
-description: Rationale for caching prescription histories instead of changing staff history screens.
+description: Preserve complete staff histories while optimizing cold loads and refreshes.
 ---
 
-Prefer version-aware history reuse for periodic refreshes without changing the existing history and comparison screens. Cold staff loads still retrieve histories; moving to on-demand loading needs explicit loading, retry, and error states in every staff history view.
+Preserve complete immutable history on staff loads and reuse unchanged versions during refreshes. Prefer bounded batch retrieval over one request per prescription; do not replace unloaded history with empty arrays. Moving to on-demand history needs explicit loading, retry, and error states in every staff history view.
 
-**Why:** Staff history appears in several views, not just an opened history panel. The optimization was deliberately scoped to eliminating repeated downloads while preserving complete comparison data and visible load failures.
+**Why:** Several Administrator and Doctor views use history directly, including cross-patient history and version comparisons. Optimizing request counts must not make missing clinical records appear to be an empty history or remove earlier comparison snapshots.
 
-**How to apply:** If optimizing first-load performance later, handle all Administrator and Doctor history views together rather than silently substituting empty history arrays. Preserve the staff-only boundary.
+**How to apply:** Cover cold loads, version invalidation, overlapping requests, visible failures/retries, and immutable snapshot isolation together. Keep caches scoped to the authenticated staff session and preserve the Patient Portal boundary.
