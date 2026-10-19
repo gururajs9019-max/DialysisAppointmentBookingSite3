@@ -135,6 +135,21 @@ async function runBrowserSessionOutcomeTest(patientName, machineCode, machineNam
     await revisitedSession.click();
     await page.getByRole("heading", { name: "Missed Session Reason" }).waitFor();
     assert.equal(await page.getByText(reason, { exact: true }).isVisible(), true, "saved missed reason should remain visible after leaving and reopening the session");
+
+    await page.getByRole("navigation").getByRole("button", { name: /^Missed Slots/ }).click();
+    await page.getByRole("heading", { name: "Missed Slot Management" }).waitFor();
+    assert.equal(await page.getByText(reason, { exact: true }).isVisible(), true, "Missed Slots should show the same saved reason");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await revisitedSession.click();
+    await page.getByRole("heading", { name: "Missed Session Reason" }).waitFor();
+    assert.equal(await page.getByText(reason, { exact: true }).isVisible(), true, "missed reason should reload from saved session data after a full page refresh");
   } finally {
     await browser.close();
   }
