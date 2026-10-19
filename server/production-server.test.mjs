@@ -22,8 +22,8 @@ async function unusedPort() {
   return port;
 }
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-async function runProductionIntegration(baseUrl) {
-  const integration = spawn(process.execPath, ["server/integration.test.mjs"], {
+async function runProductionIntegration(baseUrl, file = "server/integration.test.mjs") {
+  const integration = spawn(process.execPath, [file], {
     cwd: root,
     env: { ...process.env, TEST_BASE_URL: baseUrl },
     stdio: "inherit",
@@ -68,6 +68,7 @@ try {
   assert.match(html, /id=["']root["']/i, "production root should serve built application HTML");
   assert.ok(!html.includes("/@vite/client"), "production HTML must not include the Vite development client");
   await runProductionIntegration(`http://127.0.0.1:${port}`);
+  await runProductionIntegration(`http://127.0.0.1:${port}`, "server/staff-gaps.test.mjs");
   console.log("production server smoke test passed");
 } finally {
   if (child && child.exitCode === null) {

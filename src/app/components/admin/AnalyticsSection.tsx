@@ -8,6 +8,7 @@ import {
   ChevronDown, Info, TrendingUp, SkipForward, Beaker,
 } from "lucide-react";
 import type { AdminPrescription, Patient, Machine, DialysisSession } from "../../AdminApp";
+import { clinicalValue, recorded, investigationStats, investigationPaths } from "../../../../shared/clinical-data.mjs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -93,7 +94,15 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
   const [selectedInvestigation, setSelectedInvestigation] = useState("All Clinical Investigations");
   const total = patients.length;
 
-  const recordedCount = 0;
+  const stats = investigationStats(patients, selectedInvestigation);
+  const countParam = (path: string) => patients.filter(p => recorded(clinicalValue(p,path))).length;
+  const numericStats = (path: string) => {
+    const values = patients.map(p=>clinicalValue(p,path)).filter(v=>recorded(v)&&Number.isFinite(Number(v))).map(Number);
+    return { count: values.length, average: values.length ? (values.reduce((a,b)=>a+b,0)/values.length).toFixed(1) : "N/A",
+      min: values.length?Math.min(...values):"N/A", max: values.length?Math.max(...values):"N/A" };
+  };
+  const mcvStats = numericStats("cbc.mcv");
+  const recordedCount = stats.recorded;
   const pct = total > 0 ? Math.round((recordedCount / total) * 100) : 0;
 
   const renderInvestigationDetail = () => {
@@ -102,23 +111,23 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <StatCard label="Total Patients" value={total} color="blue" />
-            <StatCard label="With Investigation Data" value={0} sub="0% complete" color="green" />
-            <StatCard label="Without Investigation Data" value={total} sub="100% pending" color="amber" />
-            <StatCard label="Overall Completion" value="0%" color="slate" />
+            <StatCard label="With Investigation Data" value={recordedCount} sub={`${pct}% complete`} color="green" />
+            <StatCard label="Without Investigation Data" value={stats.missing} sub={`${100-pct}% pending`} color="amber" />
+            <StatCard label="Overall Completion" value={`${pct}%`} color="slate" />
           </div>
-          <NoDataNote message="Investigation data (CBC, Serum Ferritin, Thyroid Profile, EF, etc.) is collected during patient registration. No investigation values have been recorded for existing patients in the current database." />
+          {!recordedCount && <NoDataNote message="No investigation values have been recorded for these patients." />}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {["CBC (Hb, TLC, PLT, MCV)", "Serum Ferritin", "Serum Calcium", "Thyroid Profile (T3, T4, TSH)", "2D Echo", "EF (%)", "Serum Phosphorous", "Renal Function Test"].map(inv => (
               <div key={inv} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <p className="text-sm font-semibold text-slate-700 mb-3">{inv}</p>
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>Recorded</span>
-                  <span className="font-bold text-slate-800">0 / {total}</span>
+                  <span className="font-bold text-slate-800">{investigationStats(patients, Object.keys(investigationPaths)[["CBC (Hb, TLC, PLT, MCV)", "Serum Ferritin", "Serum Calcium", "Thyroid Profile (T3, T4, TSH)", "2D Echo", "EF (%)", "Serum Phosphorous", "Renal Function Test"].indexOf(inv)]).recorded} / {total}</span>
                 </div>
                 <div className="mt-2 h-1.5 bg-slate-100 rounded-full">
-                  <div className="h-full bg-blue-500 rounded-full" style={{ width: "0%" }} />
+                  <div className="h-full bg-blue-500 rounded-full" style={{ width: `${investigationStats(patients, Object.keys(investigationPaths)[["CBC (Hb, TLC, PLT, MCV)", "Serum Ferritin", "Serum Calcium", "Thyroid Profile (T3, T4, TSH)", "2D Echo", "EF (%)", "Serum Phosphorous", "Renal Function Test"].indexOf(inv)]).percentage}%` }} />
                 </div>
-                <p className="text-xs text-slate-400 mt-1">0% recorded</p>
+                <p className="text-xs text-slate-400 mt-1">Based on saved patient investigations</p>
               </div>
             ))}
           </div>
@@ -130,18 +139,18 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard label="Patients with CBC" value={0} sub={`0 of ${total}`} color="blue" />
-            <StatCard label="Pending" value={total} sub="100% pending" color="amber" />
-            <StatCard label="Completion" value="0%" color="slate" />
+            <StatCard label="Patients with CBC" value={stats.recorded} sub={`${stats.recorded} of ${total}`} color="blue" />
+            <StatCard label="Pending" value={stats.missing} color="amber" />
+            <StatCard label="Completion" value={`${pct}%`} color="slate" />
             <StatCard label="Parameters" value={4} sub="Hb, TLC, PLT, MCV" color="violet" />
           </div>
-          <NoDataNote message="CBC values (Hb, TLC, PLT, MCV) are collected during patient registration but are not yet stored in the patient record database." />
+          {!recordedCount && <NoDataNote message="No CBC values are recorded for these patients." />}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {["Hb (Haemoglobin)", "TLC (Leukocyte Count)", "PLT (Platelet Count)", "MCV (Mean Corpuscular Vol.)"].map(param => (
               <div key={param} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <p className="text-xs font-semibold text-slate-700 mb-2">{param}</p>
-                <p className="text-xl font-bold text-slate-800">0</p>
-                <p className="text-xs text-slate-400 mt-0.5">0 of {total} recorded</p>
+                <p className="text-xl font-bold text-slate-800">{countParam(`cbc.${param.split(" ")[0].toLowerCase()}`)}</p>
+                <p className="text-xs text-slate-400 mt-0.5">of {total} recorded</p>
               </div>
             ))}
           </div>
@@ -150,10 +159,10 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
             <h4 className="text-sm font-semibold text-slate-700 mb-3">MCV — Numeric Analytics</h4>
             <p className="text-xs text-slate-400 italic mb-3">MCV analytics use only actual recorded numeric values. No values are generated.</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <StatCard label="Patients with MCV" value={0} color="blue" />
-              <StatCard label="Average MCV" value="N/A" color="slate" />
-              <StatCard label="Minimum MCV" value="N/A" color="slate" />
-              <StatCard label="Maximum MCV" value="N/A" color="slate" />
+              <StatCard label="Patients with MCV" value={mcvStats.count} color="blue" />
+              <StatCard label="Average MCV" value={mcvStats.average} color="slate" />
+              <StatCard label="Minimum MCV" value={mcvStats.min} color="slate" />
+              <StatCard label="Maximum MCV" value={mcvStats.max} color="slate" />
             </div>
           </div>
         </div>
@@ -163,12 +172,12 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
     if (selectedInvestigation === "EF") {
       return (
         <div className="space-y-4">
-          <NoDataNote message="EF (Ejection Fraction) values are not stored in the current patient database. Only actual numeric EF data is used for averages." />
+          {!recordedCount && <NoDataNote message="No EF values have been recorded. Only saved numeric values are used for averages." />}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard label="Patients with EF Recorded" value={0} sub={`0 of ${total}`} color="blue" />
-            <StatCard label="Average EF" value="N/A" sub="No data available" color="slate" />
-            <StatCard label="Minimum EF" value="N/A" sub="No data available" color="slate" />
-            <StatCard label="Maximum EF" value="N/A" sub="No data available" color="slate" />
+            <StatCard label="Patients with EF Recorded" value={stats.recorded} color="blue" />
+            <StatCard label="Average EF" value={stats.average ?? "N/A"} color="slate" />
+            <StatCard label="Minimum EF" value={stats.minimum ?? "N/A"} color="slate" />
+            <StatCard label="Maximum EF" value={stats.maximum ?? "N/A"} color="slate" />
           </div>
         </div>
       );
@@ -177,13 +186,13 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
     if (selectedInvestigation === "Thyroid Profile") {
       return (
         <div className="space-y-4">
-          <NoDataNote message="Thyroid Profile values (T3, T4, TSH) are not stored in the current patient database." />
+          {!recordedCount && <NoDataNote message="No thyroid profile values are recorded for these patients." />}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {["T3", "T4", "TSH"].map(param => (
               <div key={param} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <p className="text-sm font-semibold text-slate-700 mb-2">{param}</p>
-                <p className="text-xs text-slate-500">Recorded: <span className="font-bold text-slate-800">0 of {total}</span></p>
-                <p className="text-xs text-slate-500">Completed: <span className="font-bold text-slate-800">0%</span></p>
+                <p className="text-xs text-slate-500">Recorded: <span className="font-bold text-slate-800">{countParam(`thyroidProfile.${param.toLowerCase()}`)} of {total}</span></p>
+                <p className="text-xs text-slate-500">Completed: <span className="font-bold text-slate-800">{total ? Math.round(countParam(`thyroidProfile.${param.toLowerCase()}`)/total*100):0}%</span></p>
               </div>
             ))}
           </div>
@@ -194,13 +203,13 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
     if (selectedInvestigation === "Renal Function Test") {
       return (
         <div className="space-y-4">
-          <NoDataNote message="Renal Function Test values (Urea, Serum Creatinine) are not stored in the current patient database." />
+          {!recordedCount && <NoDataNote message="No renal function test values are recorded for these patients." />}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {["Urea", "Serum Creatinine"].map(param => (
               <div key={param} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <p className="text-sm font-semibold text-slate-700 mb-2">{param}</p>
-                <p className="text-xs text-slate-500">Recorded: <span className="font-bold text-slate-800">0 of {total}</span></p>
-                <p className="text-xs text-slate-500">Completed: <span className="font-bold text-slate-800">0%</span></p>
+                <p className="text-xs text-slate-500">Recorded: <span className="font-bold text-slate-800">{countParam(param === "Urea" ? "rft.urea" : "rft.creatinine")} of {total}</span></p>
+                <p className="text-xs text-slate-500">Completed: <span className="font-bold text-slate-800">{total ? Math.round(countParam(param === "Urea" ? "rft.urea" : "rft.creatinine")/total*100):0}%</span></p>
               </div>
             ))}
           </div>
@@ -211,11 +220,11 @@ function ClinicalInvestigationPanel({ patients }: { patients: Patient[] }) {
     // Serum Ferritin, Serum Calcium, 2D Echo, Serum Phosphorous → Yes/No/Total/Percentage
     return (
       <div className="space-y-4">
-        <NoDataNote message={`${selectedInvestigation} data is not stored in the current patient database.`} />
+        {!recordedCount && <NoDataNote message={`No ${selectedInvestigation} data is recorded for these patients.`} />}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <StatCard label="Yes (Recorded)" value={0} color="green" />
-          <StatCard label="No (Not Recorded)" value={total} color="red" />
-          <StatCard label="Total Recorded" value={0} sub={`0 of ${total}`} color="blue" />
+          <StatCard label="Yes (Recorded)" value={stats.recorded} color="green" />
+          <StatCard label="No (Not Recorded)" value={stats.missing} color="red" />
+          <StatCard label="Total Recorded" value={stats.recorded} sub={`${stats.recorded} of ${total}`} color="blue" />
           <StatCard label="Percentage Recorded" value={`${pct}%`} color="violet" />
         </div>
       </div>
@@ -626,8 +635,8 @@ function OutcomesPanel({ patients }: { patients: Patient[] }) {
     Active:        patients.filter(p => p.treatmentStatus === "Active").length,
     Transplanted:  patients.filter(p => p.treatmentStatus === "Transplanted").length,
     Expired:       patients.filter(p => p.treatmentStatus === "Expired").length,
-    Shifted:       patients.filter(p => p.treatmentStatus === "Shifted").length,
-    Discontinued:  patients.filter(p => p.treatmentStatus === "Discontinued").length,
+    Shifted:       patients.filter(p => ["Shifted","Transferred"].includes(p.treatmentStatus)).length,
+    Discontinued:  patients.filter(p => ["Discontinued","Temporarily inactive","Screening ended"].includes(p.treatmentStatus)).length,
   }), [patients]);
 
   const rows = [
@@ -1029,6 +1038,15 @@ type ClinicalCategory = "comorbidities" | "lft" | "access";
 function AdditionalClinicalPanel({ patients }: { patients: Patient[] }) {
   const [category, setCategory] = useState<ClinicalCategory>("comorbidities");
   const total = patients.length;
+  const lftStats = investigationStats(patients,"LFT");
+  const lftPaths = ["lft.totalProtein","lft.albumin","lft.totalBilirubin","lft.directBilirubin","lft.ast","lft.alt","lft.alp"];
+  const lftCount = (index: number) => patients.filter(p=>recorded(clinicalValue(p,lftPaths[index]))).length;
+  const hasAccess = (p: Patient, key: string) => {
+    const v = p.medicalInfo?.[key];
+    return recorded(v) && !["no","false","none","not applicable"].includes(String(v).toLowerCase());
+  };
+  const accessCounts = ["avFistula","permacath","temporaryCatheter"].map(key=>patients.filter(p=>hasAccess(p,key)).length);
+  const withAccess = patients.filter(p=>["avFistula","permacath","temporaryCatheter"].some(k=>hasAccess(p,k))).length;
 
   const comorbStats = useMemo(() => {
     const hasHT = patients.filter(p => p.comorbidities.toLowerCase().includes("hypertension")).length;
@@ -1125,23 +1143,23 @@ function AdditionalClinicalPanel({ patients }: { patients: Patient[] }) {
       const lftParams = ["Total Protein", "Albumin", "Total Bilirubin (TB)", "Direct Bilirubin (DB)", "AST", "ALT", "ALP"];
       return (
         <div className="space-y-4">
-          <NoDataNote message="LFT (Liver Function Test) values are collected during patient registration but are not yet stored in the patient record database. When patients with LFT data are registered, analytics will populate automatically." />
+          {!lftStats.recorded && <NoDataNote message="No liver function test values are recorded for these patients." />}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard label="Patients with LFT" value={0} sub={`0 of ${total}`} color="blue" />
-            <StatCard label="Pending / Not Recorded" value={total} color="amber" />
-            <StatCard label="Completion %" value="0%" color="slate" />
+            <StatCard label="Patients with LFT" value={lftStats.recorded} color="blue" />
+            <StatCard label="Pending / Not Recorded" value={lftStats.missing} color="amber" />
+            <StatCard label="Completion %" value={`${lftStats.percentage}%`} color="slate" />
             <StatCard label="Total Parameters" value={lftParams.length} color="violet" />
           </div>
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <h4 className="text-sm font-semibold text-slate-700 mb-4">LFT Parameter Availability</h4>
             <div className="space-y-3">
-              {lftParams.map(param => (
+              {lftParams.map((param,index) => (
                 <div key={param} className="flex items-center gap-3">
                   <span className="text-sm text-slate-600 w-44 shrink-0">{param}</span>
                   <div className="flex-1 h-5 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 rounded-full" style={{ width: "0%" }} />
+                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${total?lftCount(index)/total*100:0}%` }} />
                   </div>
-                  <span className="text-xs text-slate-400 w-16 text-right">0 / {total}</span>
+                  <span className="text-xs text-slate-400 w-16 text-right">{lftCount(index)} / {total}</span>
                 </div>
               ))}
             </div>
@@ -1153,12 +1171,12 @@ function AdditionalClinicalPanel({ patients }: { patients: Patient[] }) {
     // Access
     return (
       <div className="space-y-4">
-        <NoDataNote message="Dialysis access information (AVF, Permacath, Temp Catheter) is collected during patient registration but is not yet stored in the patient record database. When patients with access data are registered, analytics will populate automatically." />
+        {!withAccess && <NoDataNote message="No dialysis access details are recorded for these patients." />}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <StatCard label="Total with Access" value={0} sub={`0 of ${total}`} color="blue" />
-          <StatCard label="AVF" value={0} color="green" />
-          <StatCard label="Permacath" value={0} color="violet" />
-          <StatCard label="Temp Catheter" value={0} color="amber" />
+          <StatCard label="Total with Access" value={withAccess} sub={`${withAccess} of ${total}`} color="blue" />
+          <StatCard label="AVF" value={accessCounts[0]} color="green" />
+          <StatCard label="Permacath" value={accessCounts[1]} color="violet" />
+          <StatCard label="Temp Catheter" value={accessCounts[2]} color="amber" />
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
           <h4 className="text-sm font-semibold text-slate-700 mb-4">Access Type Distribution</h4>
@@ -1175,8 +1193,8 @@ function AdditionalClinicalPanel({ patients }: { patients: Patient[] }) {
                 {["AVF", "Permacath (Tunnelled)", "Temporary Catheter", "Not Recorded"].map((type, i) => (
                   <tr key={type} className="border-b border-slate-50 last:border-0">
                     <td className="py-2.5 text-slate-700">{type}</td>
-                    <td className="py-2.5 text-right font-semibold text-slate-800">{i === 3 ? total : 0}</td>
-                    <td className="py-2.5 text-right text-slate-500">{i === 3 ? "100%" : "0%"}</td>
+                    <td className="py-2.5 text-right font-semibold text-slate-800">{i === 3 ? total-withAccess : accessCounts[i]}</td>
+                    <td className="py-2.5 text-right text-slate-500">{total?Math.round((i===3?total-withAccess:accessCounts[i])/total*100):0}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -1226,16 +1244,28 @@ export function AnalyticsSection({ patients, machines, sessions, prescriptions, 
   const [activeCategory, setActiveCategory] = useState<AnalyticsCategory>("clinical");
   const [dateRange, setDateRange] = useState<DateRange>("month");
   const [unitFilter, setUnitFilter] = useState<UnitFilter>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
   // Date filter for sessions (relative string dates)
   const filteredSessions = useMemo(() => {
     let s = sessions;
     if (unitFilter !== "all") s = s.filter(sess => sess.unit === unitFilter);
-    if (dateRange === "today") s = s.filter(sess => sess.date === "Today");
-    return s;
-  }, [sessions, unitFilter, dateRange]);
+    const end=new Date(),start=new Date();
+    if(dateRange==="week") start.setDate(start.getDate()-((start.getDay()+6)%7));
+    if(dateRange==="month") start.setDate(1);
+    if(dateRange==="3months") start.setMonth(start.getMonth()-3);
+    if(dateRange==="year") {start.setMonth(0);start.setDate(1);}
+    const key=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const from=dateRange==="custom"?customFrom:key(start),to=dateRange==="custom"?customTo:key(end);
+    return s.filter(sess=>(!from||sess.date>=from)&&(!to||sess.date<=to));
+  }, [sessions, unitFilter, dateRange, customFrom, customTo]);
 
-  const filteredPatients = useMemo(() => patients, [patients]);
+  const filteredPatients = useMemo(() => {
+    if(unitFilter==="all") return patients;
+    const ids=new Set(filteredSessions.map(s=>s.patientId));
+    return patients.filter(p=>ids.has(p.id));
+  }, [patients, filteredSessions, unitFilter]);
   const filteredMachines = useMemo(() =>
     unitFilter === "all" ? machines : machines.filter(m => m.unit === unitFilter),
     [machines, unitFilter]
@@ -1267,6 +1297,10 @@ export function AnalyticsSection({ patients, machines, sessions, prescriptions, 
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
+        {dateRange==="custom" && <>
+          <label className="text-sm text-slate-600">From <input aria-label="Analytics from date" type="date" value={customFrom} max={customTo||undefined} onChange={e=>setCustomFrom(e.target.value)} className="border rounded-xl p-2 bg-white" /></label>
+          <label className="text-sm text-slate-600">To <input aria-label="Analytics to date" type="date" value={customTo} min={customFrom||undefined} onChange={e=>setCustomTo(e.target.value)} className="border rounded-xl p-2 bg-white" /></label>
+        </>}
         <div className="relative">
           <select
             value={dateRange}

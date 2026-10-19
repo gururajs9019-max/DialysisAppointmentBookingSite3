@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
+import { useStaffSync } from "./lib/useStaffSync";
 import type { AdminPrescription, RxNotification, Patient, Machine, DialysisSession } from "./AdminApp";
 import { DoctorAuthPortal, DoctorData } from "./components/doctor/DoctorAuthPortal";
 import { DoctorHomePage } from "./components/doctor/DoctorHomePage";
@@ -10,7 +11,7 @@ import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
 import { DoctorViralStatus } from "./components/doctor/DoctorViralStatus";
 import { DoctorTreatmentProgress } from "./components/doctor/DoctorTreatmentProgress";
 import { logoutStaff } from "./lib/appointmentApi";
-import { loadStaffData, type StaffAnalytics } from "./lib/staffApi";
+import { loadStaffData, markNotificationRead, type StaffAnalytics, type StaffData, type StaffNotification } from "./lib/staffApi";
 import {
   Stethoscope,
   Calendar,
@@ -56,6 +57,12 @@ export default function DoctorApp({
   const [analytics, setAnalytics] = useState<StaffAnalytics | null>(null);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<StaffNotification[]>([]);
+  const applyStaffData = useCallback((data: StaffData) => {
+    setPatients(data.patients); setMachines(data.machines); setSessions(data.sessions);
+    setAnalytics(data.analytics); setPrescriptions(data.prescriptions); setNotifications(data.notifications);
+  }, [setPrescriptions]);
+  useStaffSync(isAuthenticated, applyStaffData, setStaffError);
 
   const handleAuthenticate = async (doctorData: DoctorData) => {
     setStaffLoading(true); setStaffError(null);
@@ -63,6 +70,7 @@ export default function DoctorApp({
       const data = await loadStaffData();
       setPatients(data.patients); setMachines(data.machines); setSessions(data.sessions);
       setAnalytics(data.analytics); setPrescriptions(data.prescriptions);
+      setNotifications(data.notifications);
     } catch (error) {
       setStaffError(error instanceof Error ? error.message : "Staff records could not be loaded.");
     } finally { setStaffLoading(false); }
@@ -223,7 +231,11 @@ export default function DoctorApp({
         {staffLoading && <p className="mx-4 mt-4 text-sm text-blue-700">Loading saved clinical records…</p>}
         {staffError && <p className="mx-4 mt-4 text-sm text-red-700">{staffError}</p>}
         {view === "home" && (
-          <DoctorHomePage onNavigate={handleNavigate} />
+          <DoctorHomePage onNavigate={handleNavigate} sessions={sessions} machines={machines}
+            notifications={notifications} onReadNotification={async id => {
+              try { await markNotificationRead(id,true); setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n)); }
+              catch(e) { setStaffError(e instanceof Error?e.message:"Notification could not be updated."); }
+            }} />
         )}
 
         {view === "schedule" && (

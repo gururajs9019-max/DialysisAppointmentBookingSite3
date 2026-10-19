@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
+import { staffServices } from "./staff-services.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -13,7 +14,7 @@ if (!sessionSecret) throw new Error("SESSION_SECRET must be configured before st
 
 const APPOINTMENT_FIELDS = ["firstName", "lastName", "dateOfBirth", "phone", "email", "medicalId", "appointmentDate", "appointmentTime", "dialysisType"];
 const ROLES = ["doctor", "admin"];
-const LIFECYCLES = ["Active", "Transplanted", "Expired", "Shifted", "Discontinued"];
+const LIFECYCLES = ["Active", "Transplanted", "Expired", "Shifted", "Discontinued", "Temporarily inactive", "Transferred", "Screening ended"];
 const MACHINE_CATEGORIES = ["Negative", "HCV", "HBsAg", "HIV", "RVD (HIV)"];
 const SESSION_STATUSES = ["scheduled", "waiting", "running", "completed", "missed", "cancelled"];
 
@@ -60,7 +61,7 @@ async function getSessionUser(req) {
   try {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString());
     if (!payload.userId || payload.expiresAt < Date.now()) return null;
-    return (await pool.query("SELECT id, username, email, name, role FROM portal_users WHERE id=$1", [payload.userId])).rows[0] ?? null;
+    return (await pool.query("SELECT id, username, email, name, role FROM portal_users WHERE id=$1 AND status='Active'", [payload.userId])).rows[0] ?? null;
   } catch { return null; }
 }
 async function requireStaff(req, role) {
@@ -70,14 +71,14 @@ async function requireStaff(req, role) {
   return user;
 }
 async function audit(client, actor, action, entityType, entityId, metadata = {}) {
-  await client.query("INSERT INTO audit_logs (id,actor_id,action,entity_type,entity_id,metadata) VALUES ($1,$2,$3,$4,$5,$6)", [randomUUID(), actor.id, action, entityType, entityId, metadata]);
+  await client.query("INSERT INTO audit_logs (id,actor_id,action,entity_type,entity_id,metadata) VALUES ($1,$2,$3,$4,$5,$6)", [randomUUID(), actor.id, action, entityType, entityId, {...metadata,actorRole:actor.role,actorName:actor.name}]);
 }
-async function notifyRole(client, actor, targetRole, type, message, detail) {
+async function notifyRole(client, actor, targetRole, type, message, detail, related = {}) {
   const recipients = (await client.query("SELECT id FROM portal_users WHERE role=$1 AND id<>$2", [targetRole, actor.id])).rows;
   for (const recipient of recipients) {
     await client.query(
-      "INSERT INTO notifications(id,user_id,type,message,detail) VALUES($1,$2,$3,$4,$5)",
-      [randomUUID(), recipient.id, type, message, detail],
+      "INSERT INTO notifications(id,user_id,type,message,detail,patient_id,record_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
+      [randomUUID(), recipient.id, type, message, detail, related.patientId || null, related.recordId || null],
     );
   }
 }
@@ -101,7 +102,7 @@ async function login(input) {
   if (!ROLES.includes(role)) throw httpError(400, "Invalid staff role.");
   await ensureStaffUsers();
   const user = (await pool.query("SELECT * FROM portal_users WHERE role=$1 AND (username=$2 OR LOWER(email)=LOWER($2))", [role, identifier])).rows[0];
-  if (!user || !passwordsMatch(password, user.password_hash)) throw httpError(401, "Invalid username or password.");
+  if (!user || user.status !== "Active" || !passwordsMatch(password, user.password_hash)) throw httpError(401, "Invalid username or password.");
   return user;
 }
 
@@ -120,10 +121,11 @@ export function validatePatient(input, partial = false) {
   if (!partial || "name" in input) out.name = text(input.name, "name", { required: true });
   if ("viralStatus" in input) { object(input.viralStatus, "viralStatus"); out.viralStatus = input.viralStatus; out.viralCategory = requiredViralCategory(input.viralStatus); }
   if ("treatmentStatus" in input) { if (!LIFECYCLES.includes(input.treatmentStatus)) throw httpError(400, "Invalid treatment status."); out.treatmentStatus = input.treatmentStatus; }
-  for (const key of ["age", "gender", "mobile", "address", "city", "primaryDisease", "causeOfFailure", "biopsyDone", "biopsyDetails", "comorbidities", "bloodGroup", "dialysisStartDate", "referredBy", "treatingNephrologist", "emergencyContact", "insurance", "remarks", "dialysisDaysPerWeek", "dialysisDays", "registrationFields", "medicalInfo", "investigations"]) if (key in input) out[key] = input[key];
+  for (const key of ["dateOfBirth", "registeredDate", "age", "gender", "mobile", "address", "city", "primaryDisease", "causeOfFailure", "biopsyDone", "biopsyDetails", "comorbidities", "bloodGroup", "dialysisStartDate", "referredBy", "treatingNephrologist", "emergencyContact", "insurance", "remarks", "dialysisDaysPerWeek", "dialysisDays", "registrationFields", "medicalInfo", "investigations"]) if (key in input) out[key] = input[key];
+  for (const key of ["medicalInfo", "investigations", "registrationFields"]) if (key in out) object(out[key],key);
   return out;
 }
-function patientDto(row) { const data = row.data; return { id: row.id, uhid: row.uhid, ...data, treatmentStatus: row.lifecycle, viralStatus: data.viralStatus ?? {}, createdAt: row.created_at, updatedAt: row.updated_at }; }
+function patientDto(row) { const data = row.data; return { id: row.id, uhid: row.uhid, ...data, viralCategory: row.viral_category, treatmentStatus: row.lifecycle, viralStatus: data.viralStatus ?? {}, createdAt: row.created_at, updatedAt: row.updated_at }; }
 async function fetchPatient(client, id) {
   const row = (await client.query("SELECT * FROM patients WHERE id=$1", [id])).rows[0]; if (!row) throw httpError(404, "Patient was not found."); return row;
 }
@@ -132,6 +134,7 @@ async function createSession(input, actor) {
   const date = text(input.date, "date", { required: true, max: 10 }), slot = text(input.slot, "slot", { required: true, max: 80 });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw httpError(400, "date must be YYYY-MM-DD.");
   return transaction(async client => {
+    await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE",[patientId]);
     const patient = await fetchPatient(client, patientId);
     if (patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be scheduled.");
     const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 AND unit_id=$2 FOR UPDATE", [machineId, unitId])).rows[0];
@@ -147,7 +150,12 @@ async function createSession(input, actor) {
     return sessionDto((await client.query("SELECT s.*,p.uhid,p.data AS patient_data,m.code,m.name AS machine_name,u.name AS unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0]);
   });
 }
-function sessionDto(r) { return { id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:r.session_date, slot:r.slot, status:r.status, ...r.data, createdAt:r.created_at, updatedAt:r.updated_at }; }
+function dateKey(value) {
+  return value instanceof Date
+    ? `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,"0")}-${String(value.getDate()).padStart(2,"0")}`
+    : String(value).slice(0,10);
+}
+function sessionDto(r) { return { ...r.data, id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:dateKey(r.session_date), slot:r.slot, status:r.status, createdAt:r.created_at, updatedAt:r.updated_at }; }
 async function fetchMachineWithNextSession(client, machineId) {
   return (await client.query(`
     SELECT m.*,
@@ -196,6 +204,8 @@ async function appointmentUpdate(id, input) {
   if (!result.rowCount) throw httpError(404,"Appointment was not found."); return result.rows[0].data;
 }
 
+const extendedStaffApi = staffServices({ pool, requireStaff, readJson, object, text, httpError, sendJson,
+  transaction, audit, notifyRole, hashPassword, validatePatient, patientDto, fetchPatient, recalculateMachineAvailability, requiredViralCategory, dateKey });
 async function api(req, res, url) {
   const path = url.pathname, parts = path.split("/").filter(Boolean);
   try {
@@ -205,6 +215,7 @@ async function api(req, res, url) {
     if (path === "/api/appointments") { await requireStaff(req); if(req.method==="GET") sendJson(res,200,{appointments:await appointmentList()}); else if(req.method==="POST") sendJson(res,201,{appointment:await appointmentCreate(await readJson(req))}); else throw httpError(405,"Method not allowed."); return true; }
     if (parts[1]==="appointments" && parts.length===3 && req.method==="PATCH") { await requireStaff(req); sendJson(res,200,{appointment:await appointmentUpdate(decodeURIComponent(parts[2]),await readJson(req))}); return true; }
 
+    if (await extendedStaffApi(req,res,url)) return true;
     if (path === "/api/users" && req.method === "GET") { await requireStaff(req,"admin"); const r=await pool.query("SELECT id,username,email,name,role,created_at FROM portal_users ORDER BY name"); sendJson(res,200,{users:r.rows}); return true; }
     if (path === "/api/users" && req.method === "POST") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), role=text(x.role,"role",{required:true}); if(!ROLES.includes(role)) throw httpError(400,"Invalid staff role."); const password=text(x.password,"password",{required:true,max:512}); if(password.length<12) throw httpError(400,"Password must be at least 12 characters."); const id=randomUUID(); try { const r=await pool.query("INSERT INTO portal_users(id,username,email,name,role,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,username,email,name,role,created_at",[id,text(x.username,"username",{max:80})||null,text(x.email,"email",{required:true,max:320}),text(x.name,"name",{required:true}),role,hashPassword(password)]); await transaction(c=>audit(c,actor,"user.create","user",id,{role})); sendJson(res,201,{user:r.rows[0]}); } catch(e) { if(e.code==="23505") throw httpError(409,"Username or email already exists."); throw e; } return true; }
 
@@ -247,15 +258,29 @@ async function api(req, res, url) {
       const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req));
       if(!SESSION_STATUSES.includes(x.status)) throw httpError(400,"Invalid session status.");
       if (x.status === "missed" && "missedReason" in x) x.missedReason = text(x.missedReason, "missed reason", { max: 500 });
+      const allowed = ["status","attendance","missedReason","missedReasonOther","vitals","complications","importantNote","notes","startTime","endTime","duration"];
+      for (const key of Object.keys(x)) if(!allowed.includes(key)) delete x[key];
+      if("vitals" in x) object(x.vitals,"vitals");
+      if("complications" in x && (!Array.isArray(x.complications)||x.complications.some(v=>typeof v!=="string"))) throw httpError(400,"Complications must be a list of text values.");
+      for(const key of ["importantNote","notes","missedReasonOther","startTime","endTime","duration"]) if(key in x) x[key]=text(x[key],key,{max:10000});
       const result = await transaction(async client => {
-        const existing = (await client.query("SELECT machine_id FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
+        const existing = (await client.query("SELECT * FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
         if (!existing) throw httpError(404, "Session was not found.");
+        if(["scheduled","waiting","running"].includes(x.status)) {
+          const patient=await fetchPatient(client,existing.patient_id);
+          if(patient.lifecycle!=="Active") throw httpError(409,"Inactive patients cannot have active sessions.");
+        }
         await client.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1", [id,x.status,x]);
         const session = (await client.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0];
         const machine = ["missed", "cancelled"].includes(x.status)
           ? await recalculateMachineAvailability(client, existing.machine_id)
           : null;
-        await audit(client,actor,"session.update","session",id,{status:x.status});
+        await audit(client,actor,"session.update","session",id,{status:x.status,before:existing.data,after:sessionDto(session)});
+        if (existing.status !== x.status || x.importantNote || x.vitals || x.complications) {
+          await notifyRole(client,actor,actor.role==="doctor"?"admin":"doctor","info",
+            x.status==="missed"?"Missed slot recorded":"Session updated",
+            `${session.patient_data.name} (${session.uhid}): ${x.status}.`,{patientId:session.patient_id,recordId:id});
+        }
         return { session: sessionDto(session), machine };
       });
       sendJson(res,200,result);

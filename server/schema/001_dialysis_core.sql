@@ -120,3 +120,15 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Additive, repeatable staff-only extensions; historical records are retained.
+ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'Active';
+ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS profile jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE clinical_notes ADD COLUMN IF NOT EXISTS data jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE clinical_notes ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS patient_id text REFERENCES patients(id);
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS record_id text;
+ALTER TABLE patients DROP CONSTRAINT IF EXISTS patients_lifecycle_check;
+ALTER TABLE patients ADD CONSTRAINT patients_lifecycle_check CHECK
+  (lifecycle IN ('Active','Transplanted','Expired','Shifted','Discontinued','Temporarily inactive','Transferred','Screening ended'));

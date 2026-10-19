@@ -1,7 +1,13 @@
 import { Calendar, Users, Activity, Settings, TrendingUp, FileText, Clock, Stethoscope, Heart } from "lucide-react";
+import type { DialysisSession, Machine } from "../../AdminApp";
+import type { StaffNotification } from "../../lib/staffApi";
 
 interface DoctorHomePageProps {
   onNavigate: (view: string) => void;
+  sessions: DialysisSession[];
+  machines: Machine[];
+  notifications: StaffNotification[];
+  onReadNotification: (id: string) => Promise<void>;
 }
 
 // KPI source data — mirrors AdminApp mock data so counts stay consistent across portals.
@@ -30,15 +36,15 @@ const ALL_MACHINE_STATUSES = [
   "available","available",                                       // U2M06–U2M07
 ] as const;
 
-export function DoctorHomePage({ onNavigate }: DoctorHomePageProps) {
+export function DoctorHomePage({ onNavigate, sessions, machines, notifications, onReadNotification }: DoctorHomePageProps) {
   // Computed KPIs — never hardcoded strings; derived from the same data as AdminApp
   const todayStats = {
-    scheduled:        TODAY_SESSION_STATUSES.length,
-    completed:        TODAY_SESSION_STATUSES.filter(s => s === "Completed").length,
-    activeNow:        TODAY_SESSION_STATUSES.filter(s => s === "Running").length,
-    pending:          TODAY_SESSION_STATUSES.filter(s => s === "Waiting").length,
-    alerts:           MISSED_SESSION_COUNT,
-    availableMachines: ALL_MACHINE_STATUSES.filter(s => s === "available").length,
+    scheduled:        sessions.filter(s=>s.date===new Date().toISOString().slice(0,10)&&!["Missed","Cancelled"].includes(s.status)).length,
+    completed:        sessions.filter(s=>s.date===new Date().toISOString().slice(0,10)&&s.status==="Completed").length,
+    activeNow:        sessions.filter(s=>s.date===new Date().toISOString().slice(0,10)&&s.status==="Running").length,
+    pending:          sessions.filter(s=>s.date===new Date().toISOString().slice(0,10)&&["Scheduled","Waiting"].includes(s.status)).length,
+    alerts:           notifications.filter(n=>!n.read).length,
+    availableMachines: machines.filter(s => s.status === "available").length,
   };
 
   const quickLinks = [
@@ -76,18 +82,12 @@ export function DoctorHomePage({ onNavigate }: DoctorHomePageProps) {
     },
   ];
 
-  const recentActivities = [
-    { type: "session",  message: "Session completed — Rajesh Kumar",       time: "Recently", icon: Activity,  color: "text-green-600" },
-    { type: "note",     message: "Clinical note added — Vikram Singh",      time: "Recently", icon: FileText,  color: "text-orange-600" },
-    { type: "schedule", message: "Slot 2 confirmed — Anjali Sharma",        time: "Recently", icon: Calendar,  color: "text-blue-600" },
-    { type: "note",     message: "Prescription updated — Priya Reddy",      time: "Recently", icon: FileText,  color: "text-purple-600" },
-  ];
+  const recentActivities = notifications.slice(0,8).map(n=>({id:n.id,read:n.read,type:n.type,message:`${n.message}: ${n.detail||""}`,
+    time:n.created_at?new Date(n.created_at).toLocaleString():"",icon:FileText,color:n.read?"text-gray-400":"text-blue-600"}));
 
-  const upcomingSessions = [
-    { time: "Morning slot", patient: "Vikram Singh", machine: "Machine-A", priority: "normal" },
-    { time: "Mid-morning slot", patient: "Deepa Reddy", machine: "Machine-B", priority: "normal" },
-    { time: "Late morning slot", patient: "Arjun Desai", machine: "Machine-C", priority: "emergency" },
-  ];
+  const upcomingSessions = sessions.filter(s=>s.date>=new Date().toISOString().slice(0,10)&&["Scheduled","Waiting"].includes(s.status))
+    .sort((a,b)=>`${a.date}${a.slot}`.localeCompare(`${b.date}${b.slot}`)).slice(0,5)
+    .map(s=>({time:`${s.date} · ${s.slot}`,patient:s.patientName,machine:s.machine,priority:s.slotType==="emergency"?"emergency":"normal"}));
 
   return (
     <div className="min-h-screen">
@@ -235,6 +235,8 @@ export function DoctorHomePage({ onNavigate }: DoctorHomePageProps) {
                     <div className="flex-1">
                       <p className="text-sm text-gray-900 font-medium">{activity.message}</p>
                       <p className="text-xs text-gray-600 mt-1">{activity.time}</p>
+                      {!activity.read && <button onClick={() => void onReadNotification(activity.id)}
+                        className="text-xs text-blue-600 mt-1 hover:underline">Mark as read</button>}
                     </div>
                   </div>
                 );

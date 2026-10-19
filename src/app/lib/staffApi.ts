@@ -43,6 +43,7 @@ async function request<T>(url: string, options: RequestInit = {}, operation: "lo
   }
   const body = await response.json().catch(() => null) as { error?: string } | null;
   if (!response.ok) throw new StaffApiError(body?.error || `Staff request failed (${response.status}).`, operation);
+  if (operation === "save") window.dispatchEvent(new Event("staff-data-changed"));
   return body as T;
 }
 
@@ -80,15 +81,15 @@ const asSession = (s: Record<string, unknown>): DialysisSession => {
     scheduled: "Scheduled", waiting: "Scheduled", running: "Scheduled", completed: "Completed",
     missed: "Missed", cancelled: "Cancelled",
   };
-  const rawAttendance = String(s.attendance || "");
-  const attendance = (["Scheduled", "Completed", "Missed", "Cancelled"].includes(rawAttendance)
-    ? rawAttendance
-    : attendanceMap[rawStatus] || "Scheduled") as DialysisSession["attendance"];
+  const attendance = (attendanceMap[rawStatus] || "Scheduled") as DialysisSession["attendance"];
   return { id: String(s.id), patientId: String(s.patientId || ""), patientName: String(s.patientName || ""),
     uhid: String(s.uhid || ""), date: String(s.date || ""), slot: String(s.slot || ""), machine: String(s.machine || ""),
-    machineId: String(s.machineId || ""), unit: String(s.unit || ""), duration: String(s.duration || ""), doctor: String(s.doctor || ""),
+    machineId: String(s.machineId || ""), unit: String(s.unitId || s.unit || ""), duration: String(s.duration || ""), doctor: String(s.doctor || ""),
     attendance,
     notes: String(s.notes || ""), startTime: String(s.startTime || ""), endTime: String(s.endTime || ""),
+    vitals: s.vitals as DialysisSession["vitals"], complications: s.complications as string[] | undefined,
+    importantNote: typeof s.importantNote === "string" ? s.importantNote : undefined,
+    slotType: s.slotType as DialysisSession["slotType"], emergencyTime: s.emergencyTime as string | undefined,
     status: statusMap[rawStatus] || "Scheduled", missedReason: typeof s.missedReason === "string" ? s.missedReason : undefined,
     missedReasonOther: typeof s.missedReasonOther === "string" ? s.missedReasonOther : undefined };
 };
@@ -200,12 +201,27 @@ export async function updatePrescription(id: string, prescription: AdminPrescrip
   return saved;
 }
 
-export interface ClinicalNoteDto { id: string; patient_id: string; body: string; created_at: string; author_name?: string; }
+export interface ClinicalNoteDto { id: string; patient_id: string; body: string; created_at: string; updated_at?: string; author_name?: string; data?: { title?: string; noteType?: string; vitals?: Record<string,string> }; }
 export const fetchClinicalNotes = (patientId: string) => request<{ notes: ClinicalNoteDto[] }>(`/api/patients/${encodeURIComponent(patientId)}/clinical-notes`);
-export const createClinicalNote = (patientId: string, body: string) => request<{ note: ClinicalNoteDto }>("/api/clinical-notes", { method: "POST", body: JSON.stringify({ patientId, body }) }, "save");
+export const fetchAllClinicalNotes = () => request<{ notes: ClinicalNoteDto[] }>("/api/clinical-notes");
+export const createClinicalNote = (patientId: string, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>("/api/clinical-notes", { method: "POST", body: JSON.stringify({ patientId, body, data }) }, "save");
+export const updateClinicalNote = (id: string, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>(`/api/clinical-notes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ body, data }) }, "save");
+export const updatePatient = async (id: string, changes: Partial<Patient>) => {
+  const r = await request<{ patient: Partial<Patient> }>(`/api/patients/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
+  return asPatient(r.patient);
+};
+export interface StaffAccount {
+  id: string; name: string; email: string; role: string; status: "Active" | "Inactive";
+  employeeId: string; specialization: string; phone: string; dateAdded: string; hasHistoricalRecords: boolean;
+}
+export const fetchStaffAccounts = () => request<{users: StaffAccount[]}>("/api/users");
+export const createStaffAccount = (data: Record<string,unknown>) => request<{user: StaffAccount}>("/api/users", {method:"POST",body:JSON.stringify(data)}, "save");
+export const updateStaffAccount = (id: string, data: Record<string,unknown>) => request<{user: StaffAccount}>(`/api/users/${encodeURIComponent(id)}`, {method:"PATCH",body:JSON.stringify(data)}, "save");
 
-export const createPatient = (patient: Record<string, unknown>) =>
-  request<{ patient: Partial<Patient> }>("/api/patients", { method: "POST", body: JSON.stringify(patient) }, "save");
+export const createPatient = async (patient: Record<string, unknown>) => {
+  const result = await request<{ patient: Partial<Patient> }>("/api/patients", { method: "POST", body: JSON.stringify(patient) }, "save");
+  return { patient: asPatient(result.patient) };
+};
 export const updateMachine = (id: string, changes: Pick<Machine, "status"> & Partial<Pick<Machine, "notes" | "name">>) =>
   request(`/api/machines/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
 export const createMachine = (machine: { unitId: string; code: string; name: string; category: string; status: string; notes?: string }) =>

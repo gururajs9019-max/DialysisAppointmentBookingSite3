@@ -1,6 +1,9 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useStaffSync } from "./lib/useStaffSync";
+import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData } from "./lib/staffApi";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
+import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
 import { logoutStaff } from "./lib/appointmentApi";
 import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, type SessionUpdatePayload } from "./lib/staffApi";
 import {
@@ -38,7 +41,8 @@ interface DoctorRecord {
 
 type MachineStatus = "available" | "in-use" | "scheduled" | "maintenance" | "disabled";
 type ViralStatusValue = "Positive" | "Negative" | "Unknown" | "Awaiting Report";
-type TreatmentStatus = "Active" | "Transplanted" | "Expired" | "Shifted" | "Discontinued";
+const TREATMENT_STATUSES = ["Active", "Transplanted", "Expired", "Shifted", "Discontinued", "Temporarily inactive", "Transferred", "Screening ended"] as const;
+type TreatmentStatus = typeof TREATMENT_STATUSES[number];
 type AttendanceStatus = "Scheduled" | "Completed" | "Missed" | "Cancelled";
 type SessionStatus = "Scheduled" | "Running" | "Waiting" | "Completed" | "Missed" | "Cancelled";
 type AssignStep = 1 | 2 | 3 | 4 | "success";
@@ -600,6 +604,9 @@ function TreatmentBadge({ status }: { status: TreatmentStatus }) {
     Expired:      "bg-gray-200 text-gray-500",
     Shifted:      "bg-blue-100 text-blue-700",
     Discontinued: "bg-red-100 text-red-700",
+    "Temporarily inactive": "bg-amber-100 text-amber-700",
+    Transferred: "bg-blue-100 text-blue-700",
+    "Screening ended": "bg-gray-200 text-gray-500",
   };
   return <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${map[status]}`}>{status}</span>;
 }
@@ -2560,7 +2567,7 @@ function SearchSection({ patients, sessions, onNavigate, onAssignPatient }: {
 function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome }: {
   sessions: DialysisSession[];
   units: DialysisUnit[];
-  onUpdateSession: (id: string, updates: Partial<DialysisSession>) => void;
+  onUpdateSession: (id: string, updates: Partial<DialysisSession>) => Promise<void>;
   onRecordOutcome: (id: string, status: "Missed" | "Cancelled", reason?: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2571,6 +2578,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
   const [savingOutcome, setSavingOutcome] = useState<"Missed" | "Cancelled" | null>(null);
   const [complicOpen, setComplicOpen] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -2597,10 +2605,13 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
     setComplicOpen(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedId) return;
-    onUpdateSession(selectedId, { vitals: draftVitals, complications: draftComplications, importantNote: draftNote });
-    setSaved(true);
+    try {
+      setSaved(false); setSessionError(null);
+      await onUpdateSession(selectedId, { vitals: draftVitals, complications: draftComplications, importantNote: draftNote });
+      setSaved(true);
+    } catch(e) { setSessionError(e instanceof Error?e.message:"Session data could not be saved."); }
   };
 
   const toggleComplication = (opt: string) => {
@@ -2614,6 +2625,9 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
     try {
       await onRecordOutcome(selectedId, status, status === "Missed" ? missedReasonDraft.trim() || undefined : undefined);
       setMissedReasonDraft("");
+      setSessionError(null);
+    } catch(e) {
+      setSessionError(e instanceof Error?e.message:"Session outcome could not be saved.");
     } finally {
       setSavingOutcome(null);
     }
@@ -2652,6 +2666,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
   return (
     <div className="space-y-6 animate-fade-in">
       <SectionHeader title="Live Dialysis Schedule" subtitle="Choose a date to view sessions, record outcomes, or enter session details" />
+      {sessionError && <p role="alert" className="text-sm text-red-600">{sessionError}</p>}
       <div className="flex flex-wrap items-center gap-3 bg-white rounded-2xl border border-slate-100 p-4">
         <label htmlFor="schedule-date" className="text-sm font-semibold text-slate-700">Schedule date</label>
         <input
@@ -2984,18 +2999,22 @@ function blankPrescription(patient: Patient): AdminPrescription {
   };
 }
 
-function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName }: {
+function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName, onPatientUpdated, onSessionStatus, onOpenSchedule }: {
   patients: Patient[];
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   sessions: DialysisSession[];
   adminName: string;
+  onPatientUpdated: (patient: Patient) => void;
+  onSessionStatus: (session: DialysisSession, status: "running" | "waiting" | "completed") => Promise<void>;
+  onOpenSchedule: () => void;
 }) {
   const [filter, setFilter] = useState<TreatmentStatus | "All">("All");
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingRxId, setEditingRxId] = useState<string | null>(null);
   const [creatingPatientId, setCreatingPatientId] = useState<string | null>(null);
+  const [clinicalEditor, setClinicalEditor] = useState<Patient | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -3072,13 +3091,15 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   return (
     <div className="space-y-6 animate-fade-in">
       <SectionHeader title="Treatment Status" subtitle="Unified patient treatment cards with clinical and prescription details" />
+      {clinicalEditor && <PatientClinicalEditor patient={clinicalEditor} onSaved={onPatientUpdated} onClose={()=>setClinicalEditor(null)} />}
+      {saveError && <p role="alert" className="text-sm text-red-600">{saveError}</p>}
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {(["Active", "Transplanted", "Expired", "Shifted", "Discontinued"] as TreatmentStatus[]).map(s => (
+        {TREATMENT_STATUSES.map(s => (
           <button key={s} onClick={() => setFilter(f => f === s ? "All" : s)}
             className={`rounded-2xl border p-4 text-center transition-all ${filter === s ? "border-violet-400 bg-violet-50 shadow-md" : "border-slate-100 bg-white hover:border-violet-200"}`}>
-            <p className="text-2xl font-bold text-slate-800">{counts[s]}</p>
+            <p className="text-2xl font-bold text-slate-800">{patients.filter(p=>p.treatmentStatus===s).length}</p>
             <TreatmentBadge status={s} />
           </button>
         ))}
@@ -3185,6 +3206,18 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
 
                   {/* ══ SECTION 2: Medical Information ══ */}
                   <div className="px-5 pb-4 border-t border-slate-100">
+                    <button onClick={()=>setClinicalEditor(p)} className="float-right mt-3 text-xs text-violet-700 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-50">Edit Clinical Information</button>
+                    <label className="inline-flex gap-2 items-center mt-3 text-xs text-slate-600">Treatment status
+                      <select aria-label={`Treatment status for ${p.name}`} value={p.treatmentStatus}
+                        onChange={async e => {
+                          const next=e.target.value as TreatmentStatus;
+                          if(next!=="Active"&&!window.confirm("This will cancel this patient's future scheduled sessions and preserve their history. Continue?"))return;
+                          try{onPatientUpdated(await updatePatient(p.id,{treatmentStatus:next}));}
+                          catch(error){setSaveError(error instanceof Error?error.message:"Patient status could not be saved.");}
+                        }} className="border border-slate-200 rounded-lg px-2 py-1 bg-white">
+                        {TREATMENT_STATUSES.map(status=><option key={status}>{status}</option>)}
+                      </select>
+                    </label>
                     <h3 className="pt-4 text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                       <FlaskConical className="w-3.5 h-3.5 text-violet-500" /> Medical Information
                     </h3>
@@ -3543,24 +3576,24 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                       {todaySess ? (
                         <>
                           {todaySess.status === "Waiting" && (
-                            <button className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs font-semibold shadow-sm shadow-blue-200">
+                            <button onClick={async ()=>{try {await onSessionStatus(todaySess,"running");} catch(e){setSaveError(e instanceof Error?e.message:"Could not start session.");}}} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs font-semibold shadow-sm shadow-blue-200">
                               <Activity className="w-3.5 h-3.5" /> Start Dialysis
                             </button>
                           )}
                           {todaySess.status === "Running" && (
                             <>
-                              <button className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 text-xs font-semibold shadow-sm shadow-emerald-200">
+                              <button onClick={async ()=>{try {await onSessionStatus(todaySess,"completed");} catch(e){setSaveError(e instanceof Error?e.message:"Could not complete session.");}}} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 text-xs font-semibold shadow-sm shadow-emerald-200">
                                 <CheckCircle className="w-3.5 h-3.5" /> Complete Session
                               </button>
-                              <button className="flex items-center gap-1.5 px-4 py-2 border border-amber-200 text-amber-700 bg-white rounded-xl hover:bg-amber-50 text-xs font-semibold">
+                              <button onClick={async ()=>{try {await onSessionStatus(todaySess,"waiting");} catch(e){setSaveError(e instanceof Error?e.message:"Could not pause session.");}}} className="flex items-center gap-1.5 px-4 py-2 border border-amber-200 text-amber-700 bg-white rounded-xl hover:bg-amber-50 text-xs font-semibold">
                                 <RefreshCw className="w-3.5 h-3.5" /> Pause
                               </button>
                             </>
                           )}
-                          <button className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 text-slate-600 bg-white rounded-xl hover:bg-slate-50 text-xs font-semibold">
+                          <button onClick={onOpenSchedule} className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 text-slate-600 bg-white rounded-xl hover:bg-slate-50 text-xs font-semibold">
                             <HeartPulse className="w-3.5 h-3.5" /> Enter Vitals
                           </button>
-                          <button className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 text-slate-600 bg-white rounded-xl hover:bg-slate-50 text-xs font-semibold">
+                          <button onClick={onOpenSchedule} className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 text-slate-600 bg-white rounded-xl hover:bg-slate-50 text-xs font-semibold">
                             <AlertTriangle className="w-3.5 h-3.5" /> Record Complication
                           </button>
                         </>
@@ -3844,9 +3877,9 @@ function MissedSlotsSection({ sessions, patients, machines, onFillSlot, onUpdate
 
 // ─── Viral Status Section ─────────────────────────────────────────────────────
 
-function ViralStatusSection({ patients: initialPatients }: { patients: Patient[] }) {
-  const [patients, setPatients] = useState(initialPatients);
+function ViralStatusSection({ patients, onPatientUpdated }: { patients: Patient[]; onPatientUpdated: (patient: Patient) => void }) {
   const [editing, setEditing] = useState<Patient | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<ViralProfile>>({});
   const [search, setSearch] = useState("");
 
@@ -3943,13 +3976,16 @@ function ViralStatusSection({ patients: initialPatients }: { patients: Patient[]
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={() => setEditing(null)} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
-              <button onClick={() => {
-                setPatients(prev => prev.map(p => p.id === editing.id ? { ...p, viralStatus: { ...p.viralStatus, ...draft } } : p));
-                setEditing(null);
+              <button onClick={async () => {
+                try {
+                  onPatientUpdated(await updatePatient(editing.id, { viralStatus: { ...editing.viralStatus, ...draft } }));
+                  setEditing(null); setSaveError(null);
+                } catch(error) { setSaveError(error instanceof Error ? error.message : "Viral status could not be saved."); }
               }} className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700">
                 Save Changes
               </button>
             </div>
+            {saveError && <p role="alert" className="text-sm text-red-600 mt-3">{saveError}</p>}
           </div>
         </div>
       )}
@@ -4190,9 +4226,26 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       const result = await createPatient({
         uhid, name, age: Number(age), gender, mobile, address, city, bloodGroup,
         primaryDisease: nativeKidneyDisease, causeOfFailure, treatingNephrologist: nephrologist,
-        insurance, comorbidities: comorbidities.join(", "), remarks, dialysisStartDate: registrationDate,
+        insurance, comorbidities: comorbidities.map(condition=>condition==="Others"?(comorbOthersText.trim()||"Others"):condition).join(", "), remarks, dialysisStartDate: registrationDate,
         treatmentStatus: patientStatus, viralStatus: { hepatitisB: hbsAg, hepatitisC: hcv, hiv, other: "" },
         dialysisDaysPerWeek, dialysisDays,
+        dateOfBirth: dobYear && dobMonth && dobDay ? `${dobYear}-${String(["January","February","March","April","May","June","July","August","September","October","November","December"].indexOf(dobMonth)+1).padStart(2,"0")}-${dobDay.padStart(2,"0")}` : "",
+        registeredDate: registrationDate,
+        registrationFields: { registrationDate, nativeKidneyDisease, patientStatus, opdIpd },
+        medicalInfo: {
+          hypertension: comorbHypertensionVal, diabetes: comorbDiabetesVal,
+          otherComorbidities: { name: comorbOthersText, value: comorbOthersVal },
+          avFistula: accessAvf, permacath: accessTunnelled, temporaryCatheter: accessTemporary, opdIpd,
+          dialysisAccess: [accessAvf && accessAvf !== "No" ? "AVF" : "", accessTunnelled && accessTunnelled !== "No" ? "Permacath" : "", accessTemporary && accessTemporary !== "No" ? "Temp Catheter" : ""].filter(Boolean).join(", "),
+        },
+        investigations: {
+          cbc: { hb: cbcHb, tlc: cbcTlc, plt: cbcPlt, mcv: cbcMcv },
+          serumFerritin, serumCalcium, thyroidProfile: { t3: thyroidT3, t4: thyroidT4, tsh: thyroidTsh },
+          twoDEcho, ejectionFraction: ef, serumPhosphorous: serumPhos,
+          rft: { urea: rftUrea, creatinine: rftCreatinine },
+          lft: { totalProtein: lftTotalProtein, albumin: lftAlbumin, totalBilirubin: lftTotalBilirubin,
+            directBilirubin: lftDirectBilirubin, ast: lftAst, alt: lftAlt, alp: lftAlp },
+        },
       });
       onCreated(result.patient as Patient);
       setSubmitted(true);
@@ -4844,6 +4897,7 @@ function NotificationsSection({
   onSystemRead: (id: string) => Promise<void>;
 }) {
   const [notifs, setNotifs] = useState(initial);
+  useEffect(()=>setNotifs(initial),[initial]);
   const unread = notifs.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
 
   const typeConfig: Record<Notification["type"], { cls: string; icon: React.ReactNode }> = {
@@ -4939,14 +4993,21 @@ function validateDoctorForm(form: {
   if (!form.name.trim() || form.name.trim().length < 2) e.name = "Full name is required (min 2 characters).";
   if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = "A valid email address is required.";
   else if (existing.some(d => d.email.toLowerCase() === form.email.trim().toLowerCase())) e.email = "A doctor with this email already exists.";
-  if (!form.password || form.password.length < 8) e.password = "Password must be at least 8 characters.";
+  if (!form.password || form.password.length < 12) e.password = "Password must be at least 12 characters.";
   else if (!/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)) e.password = "Password must contain at least one letter and one number.";
   if (!form.specialization) e.specialization = "Please select a specialization.";
   return e;
 }
 
 function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
-  const [doctors, setDoctors] = useState<DoctorRecord[]>(INITIAL_DOCTORS);
+  const [doctors, setDoctors] = useState<DoctorRecord[]>([]);
+  const [doctorError, setDoctorError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetchStaffAccounts().then(r => { if(active) setDoctors(r.users.filter(u=>u.role==="doctor")); })
+      .catch(e=>{ if(active) setDoctorError(e.message); });
+    return ()=>{active=false;};
+  }, []);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<DoctorStatus | "All">("All");
 
@@ -4957,6 +5018,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
   const [showPassword, setShowPassword] = useState(false);
   const [addForm, setAddForm] = useState({ name: "", email: "", password: "", specialization: "", phone: "", employeeId: "" });
   const [addSuccess, setAddSuccess] = useState(false);
+  const [editingDoctorId, setEditingDoctorId] = useState<string | null>(null);
 
   // Delete / deactivate modal
   const [deleteTarget, setDeleteTarget] = useState<DoctorRecord | null>(null);
@@ -4965,52 +5027,48 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
   // Status toggle confirmation
   const [toggleTarget, setToggleTarget] = useState<DoctorRecord | null>(null);
 
-  const addErrors = addAttempted ? validateDoctorForm(addForm, doctors) : {};
-  const addHasErrors = Object.keys(validateDoctorForm(addForm, doctors)).length > 0;
+  const validationForm = editingDoctorId && !addForm.password ? { ...addForm, password: "unchanged-Password1" } : addForm;
+  const validationDoctors = doctors.filter(d=>d.id!==editingDoctorId);
+  const addErrors = addAttempted ? validateDoctorForm(validationForm, validationDoctors) : {};
+  const addHasErrors = Object.keys(validateDoctorForm(validationForm, validationDoctors)).length > 0;
 
   const setField = (k: keyof typeof addForm, v: string) => setAddForm(f => ({ ...f, [k]: v }));
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     setAddAttempted(true);
     if (addHasErrors) return;
     setAddSaving(true);
-    setTimeout(() => {
-      const newDoc: DoctorRecord = {
-        id: `DOC${Date.now()}`,
-        name: addForm.name.trim(),
-        email: addForm.email.trim().toLowerCase(),
-        employeeId: addForm.employeeId.trim() || `EMP-${Date.now().toString().slice(-3)}`,
-        specialization: addForm.specialization,
-        phone: addForm.phone.trim() || "Contact via portal",
-        status: "Active",
-        dateAdded: "Just now",
-        hasHistoricalRecords: false,
-      };
-      setDoctors(prev => [newDoc, ...prev]);
-      setAddSaving(false);
+    try {
+      const result = editingDoctorId ? await updateStaffAccount(editingDoctorId,addForm) : await createStaffAccount({ ...addForm, role: "doctor" });
+      setDoctors(prev => editingDoctorId ? prev.map(d=>d.id===result.user.id?result.user:d) : [result.user,...prev]);
       setAddSuccess(true);
-    }, 700);
+      setDoctorError(null);
+    } catch(error) { setDoctorError(error instanceof Error ? error.message : "Doctor could not be saved."); }
+    finally { setAddSaving(false); }
   };
 
   const resetAdd = () => {
     setShowAdd(false); setAddAttempted(false); setAddSaving(false);
+    setEditingDoctorId(null);
     setShowPassword(false); setAddSuccess(false);
     setAddForm({ name: "", email: "", password: "", specialization: "", phone: "", employeeId: "" });
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
-    if (deleteTarget.hasHistoricalRecords) {
-      setDoctors(prev => prev.map(d => d.id === deleteTarget.id ? { ...d, status: "Inactive" } : d));
-    } else {
-      setDoctors(prev => prev.filter(d => d.id !== deleteTarget.id));
-    }
-    setDeleteConfirmed(true);
+    try {
+      const result = await updateStaffAccount(deleteTarget.id, { status: "Inactive" });
+      setDoctors(prev => prev.map(d=>d.id===result.user.id?result.user:d));
+      setDeleteConfirmed(true); setDoctorError(null);
+    } catch(error) { setDoctorError(error instanceof Error ? error.message : "Doctor could not be deactivated."); }
   };
 
-  const handleToggleStatus = (doc: DoctorRecord) => {
-    setDoctors(prev => prev.map(d => d.id === doc.id ? { ...d, status: d.status === "Active" ? "Inactive" : "Active" } : d));
-    setToggleTarget(null);
+  const handleToggleStatus = async (doc: DoctorRecord) => {
+    try {
+      const result = await updateStaffAccount(doc.id, { status: doc.status === "Active" ? "Inactive" : "Active" });
+      setDoctors(prev => prev.map(d=>d.id===result.user.id?result.user:d));
+      setToggleTarget(null); setDoctorError(null);
+    } catch(error) { setDoctorError(error instanceof Error ? error.message : "Doctor status could not be saved."); }
   };
 
   const filtered = useMemo(() => doctors.filter(d => {
@@ -5030,6 +5088,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <SectionHeader title="Doctor Management" subtitle="View, add, and manage all registered doctors in the system" />
+        {doctorError && <p role="alert" className="text-sm text-red-600">{doctorError}</p>}
         <button onClick={() => { setShowAdd(true); setAddSuccess(false); }}
           className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 transition-colors shadow-md shadow-violet-200">
           <Plus className="w-4 h-4" /> Add Doctor
@@ -5132,6 +5191,11 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                     <td className="px-5 py-4 text-xs text-slate-400">{doc.dateAdded}</td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-1.5 justify-end">
+                        <button onClick={()=> {
+                          setEditingDoctorId(doc.id); setAddForm({name:doc.name,email:doc.email,password:"",
+                            specialization:doc.specialization,phone:doc.phone,employeeId:doc.employeeId});
+                          setAddSuccess(false); setAddAttempted(false); setShowAdd(true);
+                        }} className="text-xs px-2.5 py-1.5 text-violet-600 border rounded-lg">Edit</button>
                         <button onClick={() => setToggleTarget(doc)}
                           className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg font-semibold border transition-colors ${
                             doc.status === "Active"
@@ -5144,7 +5208,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                         <button onClick={() => { setDeleteTarget(doc); setDeleteConfirmed(false); }}
                           className="flex items-center gap-1 text-xs px-2.5 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-100 font-semibold transition-colors">
                           <Trash2 className="w-3 h-3" />
-                          {doc.hasHistoricalRecords ? "Deactivate" : "Delete"}
+                          Deactivate
                         </button>
                       </div>
                     </td>
@@ -5192,6 +5256,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
               </div>
             ) : (
               <div className="overflow-y-auto flex-1 p-6 space-y-4">
+                {doctorError && <p role="alert" className="text-sm text-red-600">{doctorError}</p>}
                 {/* Name */}
                 <div>
                   <label className={labelCls}>Full Name *</label>
@@ -5217,7 +5282,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input type={showPassword ? "text" : "password"} value={addForm.password}
                       onChange={e => setField("password", e.target.value)}
-                      placeholder="Min 8 chars, include a number"
+                      placeholder={editingDoctorId ? "Leave blank to keep the current password" : "Min 12 chars, include a number"}
                       className={`pl-9 pr-10 ${addErrors.password ? errCls : inputCls}`} />
                     <button type="button" onClick={() => setShowPassword(p => !p)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -5271,7 +5336,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                 <button onClick={resetAdd} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
                 <button onClick={handleAdd} disabled={addSaving}
                   className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-50 shadow-lg shadow-violet-100 flex items-center justify-center gap-2">
-                  {addSaving ? <><RefreshCw className="w-4 h-4 animate-spin" /> Saving…</> : <><UserPlus className="w-4 h-4" /> Add Doctor</>}
+                  {addSaving ? <><RefreshCw className="w-4 h-4 animate-spin" /> Saving…</> : <><UserPlus className="w-4 h-4" /> {editingDoctorId ? "Save Doctor" : "Add Doctor"}</>}
                 </button>
               </div>
             )}
@@ -5320,12 +5385,12 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                   <CheckCircle className="w-7 h-7 text-emerald-600" />
                 </div>
                 <h4 className="font-bold text-slate-800">
-                  {deleteTarget.hasHistoricalRecords ? "Doctor deactivated." : "Doctor removed."}
+                  Doctor deactivated.
                 </h4>
                 <p className="text-xs text-slate-500 text-center">
                   {deleteTarget.hasHistoricalRecords
                     ? "The doctor's account is now inactive. All historical records are preserved."
-                    : "The doctor has been removed from the system."}
+                    : "The doctor is inactive. Their profile and records are preserved."}
                 </p>
                 <button onClick={() => { setDeleteTarget(null); setDeleteConfirmed(false); }}
                   className="mt-2 px-5 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700">
@@ -5339,7 +5404,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                     <Trash2 className="w-5 h-5 text-red-600" />
                   </div>
                   <h3 className="font-bold text-slate-800 text-base">
-                    {deleteTarget.hasHistoricalRecords ? "Deactivate Doctor" : "Delete Doctor"}
+                    Deactivate Doctor
                   </h3>
                 </div>
 
@@ -5359,7 +5424,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                   </div>
                 ) : (
                   <p className="text-sm text-slate-600 mb-5">
-                    Are you sure you want to permanently delete this doctor? This action cannot be undone.
+                    Deactivate this doctor? Access will be disabled and all historical records will be preserved.
                   </p>
                 )}
 
@@ -5367,7 +5432,7 @@ function DoctorsSection({ sessions }: { sessions: DialysisSession[] }) {
                   <button onClick={() => setDeleteTarget(null)} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
                   <button onClick={handleDeleteConfirm}
                     className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700">
-                    {deleteTarget.hasHistoricalRecords ? "Deactivate" : "Delete Doctor"}
+                    Deactivate Doctor
                   </button>
                 </div>
               </>
@@ -5407,6 +5472,14 @@ export default function AdminApp({
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
+  const applyStaffData = useCallback((records: StaffData) => {
+    setPatients(records.patients); setMachines(records.machines); setUnits(records.units);
+    setSessions(records.sessions); setPrescriptions(records.prescriptions);
+    setNotifications(records.notifications.map(n => ({id:n.id,type:n.type||"info",message:n.message||"Notification",
+      detail:n.detail||"",time:n.created_at||"",read:n.read})));
+  }, [setPrescriptions]);
+  useStaffSync(isAuthenticated, applyStaffData, setStaffError);
+  const onPatientUpdated = (patient: Patient) => setPatients(prev=>prev.map(p=>p.id===patient.id?patient:p));
 
   const unreadCount = notifications.filter(n => !n.read).length + rxNotifications.filter(n => !n.read).length;
 
@@ -5415,6 +5488,8 @@ export default function AdminApp({
       patientId: session.patientId, machineId: session.machineId, unitId: session.unit,
       date: session.date, slot: session.slot, status: "waiting", duration: session.duration,
       doctor: session.doctor, notes: session.notes,
+      startTime: session.startTime, endTime: session.endTime, slotType: session.slotType,
+      emergencyTime: session.emergencyTime,
     });
     setSessions(prev => [{ ...session, id: created.session.id }, ...prev]);
     setMachines(prev => prev.map(machine => machine.id === session.machineId
@@ -5507,8 +5582,7 @@ export default function AdminApp({
                 Completed: "completed", Missed: "missed", Cancelled: "cancelled",
               };
               const next = statusMap[currentStatus];
-              try { await applySessionUpdate(id, { status: next }, updates); }
-              catch (error) { setStaffError(error instanceof Error ? error.message : "Session status could not be saved."); }
+              await applySessionUpdate(id, { ...updates, status: next }, updates);
             }}
             onRecordOutcome={async (id, status, reason) => {
               const next = status === "Missed" ? "missed" : "cancelled";
@@ -5518,20 +5592,21 @@ export default function AdminApp({
                 payload.missedReason = reason;
                 updates.missedReason = reason;
               }
-              try { await applySessionUpdate(id, payload, updates); }
-              catch (error) { setStaffError(error instanceof Error ? error.message : "Session outcome could not be saved."); }
+              await applySessionUpdate(id, payload, updates);
             }}
           />
         );
       case "patient-history":   return <PatientHistorySection sessions={sessions} prescriptions={prescriptions} />;
       case "machines":          return <MachineSection machines={machines} patients={patients} sessions={sessions} units={units} onNavigate={navigate} />;
-      case "viral-status":      return <ViralStatusSection patients={patients} />;
+      case "viral-status":      return <ViralStatusSection patients={patients} onPatientUpdated={onPatientUpdated} />;
       case "register-patient":  return <RegisterPatientSection onCreated={patient => setPatients(prev => [patient, ...prev])} />;
       case "notifications":     return <NotificationsSection notifications={notifications} rxNotifications={rxNotifications} markRxRead={id => markRxRead(id)} onNavigate={v => navigate(v as NavSection, v)} onSystemRead={async id => {
         try { await markNotificationRead(id, true); setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); }
         catch (error) { setStaffError(error instanceof Error ? error.message : "Notification could not be updated."); }
       }} />;
-      case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} />;
+      case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} onPatientUpdated={onPatientUpdated}
+        onOpenSchedule={()=>navigate("live-schedule","Live Schedule")}
+        onSessionStatus={(session,status)=>applySessionUpdate(session.id,{status},{status:({running:"Running",waiting:"Waiting",completed:"Completed"} as const)[status]})} />;
       case "search-patients":
         return (
           <SearchSection patients={patients} sessions={sessions} onNavigate={navigate}

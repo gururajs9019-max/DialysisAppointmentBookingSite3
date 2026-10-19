@@ -83,14 +83,18 @@ export function PatientProfiles({ onNavigate, patients: apiPatients, sessions }:
     },
   ];
 
-  const patients = apiPatients.map(patient => ({
+  const patients = apiPatients.map(patient => {
+    const history=sessions.filter(s=>s.patientId===patient.id).sort((a,b)=>b.date.localeCompare(a.date));
+    const latest=history.find(s=>s.vitals || s.complications?.length);
+    return {
     id: patient.id, name: patient.name, age: String(patient.age || "—"), phone: patient.mobile || "Not recorded",
     email: "Not recorded", diagnosis: patient.primaryDisease || "Not recorded", dialysisType: "Hemodialysis",
     frequency: patient.dialysisDaysPerWeek ? `${patient.dialysisDaysPerWeek} sessions/week` : "Not recorded",
     lastSession: patient.lastDialysis || "Not recorded", nextSession: patient.currentSchedule || "Not scheduled",
-    adherence: "See treatment progress", complications: patient.remarks || "None", vitals: { bp: "Not recorded", hr: "Not recorded", weight: "Not recorded" },
+    adherence: "See treatment progress", complications: latest?.complications?.join(", ") || patient.remarks || "None",
+    vitals: { bp: latest?.vitals?.bp || "Not recorded", hr: latest?.vitals?.heartRate || "Not recorded", weight: latest?.vitals?.preWeight || latest?.vitals?.postWeight || "Not recorded" },
     treatments: sessions.filter(session => session.patientId === patient.id).length, status: patient.treatmentStatus === "Active" ? "active" : "priority",
-  }));
+  };});
   const filteredPatients = patients.filter(patient =>
     patient.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     patient.diagnosis.toLowerCase().includes(searchQuery.toLowerCase())
@@ -100,11 +104,8 @@ export function PatientProfiles({ onNavigate, patients: apiPatients, sessions }:
     ? patients.find(p => p.id === selectedPatient)
     : null;
 
-  const recentSessions = [
-    { date: 'Recently', duration: '4 hours', machine: 'M-03', complications: 'None', notes: 'Session completed without issues' },
-    { date: 'Recently', duration: '4 hours', machine: 'M-05', complications: 'Minor', notes: 'Slight discomfort reported, monitored' },
-    { date: 'Recently', duration: '3.5 hours', machine: 'M-03', complications: 'None', notes: 'Early termination per patient request' },
-  ];
+  const recentSessions = sessions.filter(s=>s.patientId===selectedPatient).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5)
+    .map(s=>({date:s.date,duration:s.duration,machine:s.machine,complications:s.complications?.join(", ")||"None",notes:s.importantNote||s.notes||s.status}));
 
   return (
     <div className="space-y-6">
@@ -281,7 +282,7 @@ export function PatientProfiles({ onNavigate, patients: apiPatients, sessions }:
                     </div>
                   ))}
                 </div>
-                <button className="w-full mt-4 px-4 py-2 border-2 border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 font-medium">
+                <button onClick={()=>onNavigate("treatment-progress")} className="w-full mt-4 px-4 py-2 border-2 border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 font-medium">
                   View Full History
                 </button>
               </div>
@@ -296,7 +297,7 @@ export function PatientProfiles({ onNavigate, patients: apiPatients, sessions }:
                       <p className="text-sm text-yellow-800 mb-4">
                         {selectedPatientData.complications}
                       </p>
-                      <button className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-medium text-sm">
+                      <button onClick={()=>onNavigate("notes")} className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-medium text-sm">
                         View Details & Action Plan
                       </button>
                     </div>

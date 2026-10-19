@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { FileText, Plus, Search, User, Edit, Trash2, X, ChevronDown, Check } from "lucide-react";
 import type { Patient } from "../../AdminApp";
-import { createClinicalNote, fetchClinicalNotes } from "../../lib/staffApi";
+import { createClinicalNote, fetchClinicalNotes, fetchAllClinicalNotes, updateClinicalNote } from "../../lib/staffApi";
 
 interface ClinicalNotesProps {
   onNavigate: (view: string) => void;
@@ -49,7 +49,7 @@ function PatientSearchSelect({
   const filtered = query.trim().length === 0
     ? patients
     : patients.filter(p =>
-        p.name.toLowerCase().includes(query.toLowerCase())
+        p.name.toLowerCase().includes(query.toLowerCase()) || p.uhid.toLowerCase().includes(query.toLowerCase())
       );
 
   // Close on outside click
@@ -159,6 +159,8 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedNote, setSelectedNote] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Form state
   const [formPatient, setFormPatient] = useState<Patient | null>(null);
@@ -175,19 +177,24 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
 
-  const loadNotes = async (patient: Patient) => {
+  const loadNotes = async (patient?: Patient) => {
     setNotesLoading(true); setNotesError(null);
     try {
-      const result = await fetchClinicalNotes(patient.id);
-      setNotes(result.notes.map(note => ({
-        id: note.id, patientName: patient.name, patientId: patient.id, patientUhid: patient.uhid,
-        date: note.created_at, noteType: "general", title: "Clinical Note", content: note.body, author: note.author_name || "Staff",
-      })));
+      const result = patient ? await fetchClinicalNotes(patient.id) : await fetchAllClinicalNotes();
+      setNotes(result.notes.map(note => {
+        const owner = patient || patients.find(p=>p.id===note.patient_id);
+        return {
+          id: note.id, patientName: owner?.name || "Patient", patientId: note.patient_id, patientUhid: owner?.uhid || "",
+          date: note.updated_at || note.created_at, noteType: note.data?.noteType || "general",
+          title: note.data?.title || "Clinical Note", content: note.body, author: note.author_name || "Staff",
+          vitals: note.data?.vitals as unknown as NoteVitals,
+        };
+      }));
     } catch (error) { setNotesError(error instanceof Error ? error.message : "Clinical notes could not be loaded."); }
     finally { setNotesLoading(false); }
   };
 
-  useEffect(() => { if (formPatient) void loadNotes(formPatient); }, [formPatient]);
+  useEffect(() => { void loadNotes(formPatient || undefined); }, [formPatient, patients]);
 
   const filteredNotes = notes.filter(note =>
     note.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -196,6 +203,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   );
 
   function resetForm() {
+    setEditingId(null);
     setFormPatient(null);
     setFormNoteType("session");
     setFormTitle("");
@@ -219,11 +227,17 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
       return;
     }
     try {
+      if (saving) return;
+      setSaving(true);
       setSaveError(null);
-      await createClinicalNote(formPatient.id, `${formTitle || "Clinical Note"} [${formNoteType}]\n${formContent}`);
+      const data = { title: formTitle || "Clinical Note", noteType: formNoteType,
+        vitals: { bloodPressure: formBP, heartRate: formHR, weight: formWeight, temperature: formTemp } };
+      if (editingId) await updateClinicalNote(editingId, formContent, data);
+      else await createClinicalNote(formPatient.id, formContent, data);
       await loadNotes(formPatient);
       resetForm(); setShowAddForm(false);
     } catch (error) { setSaveError(error instanceof Error ? error.message : "Clinical note could not be saved."); }
+    finally { setSaving(false); }
   }
 
   const getNoteTypeColor = (type: string) => {
@@ -266,7 +280,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
       {/* Add Note Form */}
       {showAddForm && (
         <div className="bg-white rounded-lg shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">New Clinical Note</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">{editingId ? "Edit Clinical Note" : "New Clinical Note"}</h2>
           <form className="space-y-4" onSubmit={handleSaveNote}>
             <div className="grid md:grid-cols-2 gap-4">
               {/* Searchable patient selector */}
@@ -371,6 +385,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
             <div className="flex gap-3 pt-4">
               <button
                 type="submit"
+                disabled={saving}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
               >
                 Save Note
@@ -391,7 +406,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
       {/* Search and Filter */}
       {notesLoading && <p className="text-sm text-blue-700">Loading saved notes…</p>}
       {notesError && <p className="text-sm text-red-600">{notesError}</p>}
-      {!formPatient && !notesLoading && <p className="text-sm text-slate-500">Select a patient in the note form to view that patient’s saved clinical notes.</p>}
+      {!formPatient && !notesLoading && <p className="text-sm text-slate-500">Showing saved clinical notes for all patients.</p>}
       <div className="bg-white rounded-lg shadow-md p-4">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1 relative">
@@ -452,7 +467,15 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
               <div className="flex gap-2">
                 <button
                   className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
-                  onClick={e => e.stopPropagation()}
+                  title="Edit clinical note"
+                  onClick={e => {
+                    e.stopPropagation(); setEditingId(note.id);
+                    setFormPatient(patients.find(p=>p.id===note.patientId)||null);
+                    setFormTitle(note.title); setFormContent(note.content); setFormNoteType(note.noteType);
+                    setFormBP(note.vitals?.bloodPressure||""); setFormHR(note.vitals?.heartRate||"");
+                    setFormWeight(note.vitals?.weight||""); setFormTemp(note.vitals?.temperature||"");
+                    setSaveError(null); setShowAddForm(true); window.scrollTo({top:0,behavior:"smooth"});
+                  }}
                 >
                   <Edit className="w-4 h-4" />
                 </button>

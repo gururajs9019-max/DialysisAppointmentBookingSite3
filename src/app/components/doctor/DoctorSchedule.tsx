@@ -67,6 +67,7 @@ function getStatusColor(status: string) {
     case "scheduled":   return "bg-violet-100 text-violet-700 border-violet-300";
     case "pending":     return "bg-amber-100 text-amber-700 border-amber-300";
     case "cancelled":   return "bg-red-100 text-red-700 border-red-300";
+    case "missed":      return "bg-red-100 text-red-700 border-red-300";
     default:            return "bg-gray-100 text-gray-700 border-gray-300";
   }
 }
@@ -87,7 +88,7 @@ export function DoctorSchedule({ onNavigate, sessions: apiSessions }: DoctorSche
   const displayedDateKey = localDateKey(displayDate);
   const displayedWeek = weekDateKeys(displayDate);
 
-  const sourceSessions = apiSessions.map(s => ({ id: s.id, date: s.date, slot: s.slot.replace("Slot ", "S"), patient: s.patientName, machine: s.machine, unit: s.unit, status: s.status === "Running" ? "in-progress" : s.status === "Waiting" ? "pending" : s.attendance === "Cancelled" ? "cancelled" : s.attendance === "Completed" ? "completed" : "scheduled", priority: "normal" })).filter(s => s.slot === "S1" || s.slot === "S2" || s.slot === "S3");
+  const sourceSessions = apiSessions.map(s => ({ id: s.id, date: s.date, slot: s.slot.replace("Slot ", "S"), patient: s.patientName, machine: s.machine, unit: s.unit==="U1"?"Unit 1":s.unit==="U2"?"Unit 2":s.unit, status: s.status === "Missed" ? "missed" : s.status === "Cancelled" ? "cancelled" : s.status === "Completed" ? "completed" : s.status === "Running" ? "in-progress" : s.status === "Waiting" ? "pending" : "scheduled", priority: s.slotType==="emergency"?"emergency":"normal" })).filter(s => s.slot === "S1" || s.slot === "S2" || s.slot === "S3");
   const dailySessions = sessionsForDate(sourceSessions, displayedDateKey);
   const weeklySessions = sessionsByWeekDate(sourceSessions, displayedWeek);
   const filteredSessions = activeSlot === "all" ? dailySessions : dailySessions.filter(s => s.slot === activeSlot);
