@@ -1,3 +1,4 @@
 - [Browser test runtime](browser-test-runtime.md) — Playwright checks need declared Nix browser libraries as well as the npm package.
 - [Staff-only scope](staff-only-scope.md) — Complete Administrator and Doctor functionality without changing the Patient Portal.
 - [Database calendar dates](database-calendar-dates.md) — Preserve YYYY-MM-DD scheduling dates when the PostgreSQL driver returns Date objects.
+- [Staff history loading](staff-history-loading.md) — Preserve history comparisons and load-error behavior when optimizing staff refreshes.

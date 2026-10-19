@@ -1,3 +1,4 @@
+import { clearPrescriptionHistoryCache } from "./staffApi";
 import type { Appointment } from "../components/AppointmentCard";
 import type { BookingFormData } from "../components/BookingForm";
 
@@ -73,10 +74,12 @@ export async function loginStaff(role: StaffUser["role"], identifier: string, pa
     { method: "POST", body: JSON.stringify({ role, identifier, password }) },
     "save",
   );
+  clearPrescriptionHistoryCache();
   return result.user;
 }
 
 export async function logoutStaff(): Promise<void> {
+  clearPrescriptionHistoryCache();
   try {
     await fetch("/api/auth/logout", { method: "POST" });
   } catch {

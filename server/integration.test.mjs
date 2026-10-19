@@ -5,8 +5,10 @@
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { chromium } from "playwright";
+import { transformWithEsbuild } from "vite";
 
 const baseUrl = process.env.TEST_BASE_URL || "http://127.0.0.1:5000";
 if (!process.env.STAFF_ADMIN_PASSWORD || !process.env.STAFF_DOCTOR_PASSWORD || !process.env.DATABASE_URL) {
@@ -36,6 +38,69 @@ async function expectStatus(promise, status, message) {
   const result = await promise;
   assert.equal(result.status, status, message);
   return result.payload;
+}
+
+async function runBrowserPrescriptionCacheTest(prescriptionId, adminCookie, doctorCookie) {
+  // Load the real client in isolated browser modules. The same integration suite
+  // also runs against the production server, which must not serve TS source URLs.
+  const source = await readFile(new URL("../src/app/lib/staffApi.ts", import.meta.url), "utf8");
+  const { code } = await transformWithEsbuild(source, "staffApi.ts", { loader: "ts" });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const pages = {};
+    const counts = { admin: [], doctor: [] };
+    for (const [role, cookie] of [["admin", adminCookie], ["doctor", doctorCookie]]) {
+      const context = await browser.newContext();
+      const separator = cookie.indexOf("=");
+      await context.addCookies([{ name: cookie.slice(0, separator), value: cookie.slice(separator + 1), url: baseUrl }]);
+      const page = pages[role] = await context.newPage();
+      page.on("request", req => {
+        if (new URL(req.url()).pathname.match(/^\/api\/prescriptions\/[^/]+\/history$/)) counts[role].push(req.url());
+      });
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      await page.evaluate(async url => { globalThis.staffApiTest = await import(url); }, moduleUrl);
+      await page.evaluate(async () => {
+        await globalThis.staffApiTest.loadStaffData();
+      });
+      counts[role] = [];
+      await page.evaluate(async () => {
+        await globalThis.staffApiTest.loadStaffData();
+      });
+      assert.equal(counts[role].length, 0, `${role} unchanged refresh must reuse history`);
+    }
+
+    const read = page => page.evaluate(async id => {
+      const api = globalThis.staffApiTest;
+      return (await api.fetchPrescriptions()).find(row => row.id === id);
+    }, prescriptionId);
+    const initial = await read(pages.admin);
+    for (const [role, peer] of [["doctor", "admin"], ["admin", "doctor"]]) {
+      counts.admin = []; counts.doctor = [];
+      const notes = `${run} ${role} cached revision`;
+      const saved = await pages[role].evaluate(async ({ id, notes }) => {
+        const api = globalThis.staffApiTest;
+        const draft = (await api.fetchPrescriptions()).find(row => row.id === id);
+        return api.updatePrescription(id, { ...draft, notes, updatedBy: "Untrusted name", updatedByRole: "Untrusted role" });
+      }, { id: prescriptionId, notes });
+      assert.equal(counts[role].length, 1, `${role} save reloads only the revised history`);
+      assert.equal(saved.updatedByRole, role, "save author must remain server-authenticated");
+      assert.notEqual(saved.updatedBy, "Untrusted name");
+      const refreshed = await read(pages[peer]);
+      assert.equal(counts[peer].length, 1, `${peer} detects the other portal's revision from the list version`);
+      assert.equal(refreshed.version, saved.version);
+      assert.equal(refreshed.notes, notes);
+      assert.deepEqual(refreshed.history, saved.history, "both portals must see identical immutable history");
+      assert.deepEqual(refreshed.history.slice(-initial.history.length), initial.history, "earlier snapshots remain unchanged");
+      assert.equal(refreshed.history[0].notes, role === "doctor" ? initial.notes : `${run} doctor cached revision`);
+      assert.notEqual(refreshed.notes, refreshed.history[0].notes, "comparison views must receive distinct current and previous snapshots");
+      counts[peer] = [];
+      await read(pages[peer]);
+      assert.equal(counts[peer].length, 0, "next unchanged refresh reuses the revised history");
+    }
+  } finally {
+    await browser.close();
+  }
 }
 
 async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate) {
@@ -378,6 +443,7 @@ try {
   assert.ok(doctorNotifications.notifications.some(n => n.detail.includes(`${run}-NEG`)), "admin revision must notify doctors");
   const analytics = await expectStatus(request("/api/analytics", { cookie: admin }), 200, "analytics should be readable by admin");
   assert.equal(typeof analytics.analytics, "object");
+  await runBrowserPrescriptionCacheTest(prescription.prescription.id, admin, doctor);
   console.log("backend integration tests passed");
 } finally {
   try {

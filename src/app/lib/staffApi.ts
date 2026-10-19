@@ -42,8 +42,17 @@ async function request<T>(url: string, options: RequestInit = {}, operation: "lo
     throw new StaffApiError("The staff service is unavailable. Check your connection and try again.", operation);
   }
   const body = await response.json().catch(() => null) as { error?: string } | null;
-  if (!response.ok) throw new StaffApiError(body?.error || `Staff request failed (${response.status}).`, operation);
-  if (operation === "save") window.dispatchEvent(new Event("staff-data-changed"));
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) clearPrescriptionHistoryCache();
+    throw new StaffApiError(body?.error || `Staff request failed (${response.status}).`, operation);
+  }
+  if (operation === "save") {
+    // Invalidate before notifying refresh listeners, including overlapping loads.
+    if (options.method === "PATCH" && url.startsWith("/api/prescriptions/")) {
+      prescriptionHistoryCache.delete(decodeURIComponent(url.slice("/api/prescriptions/".length)));
+    }
+    window.dispatchEvent(new Event("staff-data-changed"));
+  }
   return body as T;
 }
 
@@ -142,15 +151,46 @@ const asHistory = (row: Record<string, any>): AdminPrescription["history"][numbe
   } as AdminPrescription["history"][number];
 };
 
+type PrescriptionHistory = AdminPrescription["history"];
+const prescriptionHistoryCache = new Map<string, { version: number; history: Promise<PrescriptionHistory> }>();
+
+// Staff login/logout starts a new cache lifetime; histories never persist to disk.
+export function clearPrescriptionHistoryCache(): void {
+  prescriptionHistoryCache.clear();
+}
+
+function fetchPrescriptionHistory(prescription: AdminPrescription): Promise<PrescriptionHistory> {
+  const version = prescription.version || 1;
+  const cached = prescriptionHistoryCache.get(prescription.id);
+  if (cached?.version === version) return cached.history;
+
+  const entry = {
+    version,
+    history: request<{ history: Record<string, any>[] }>(`/api/prescriptions/${encodeURIComponent(prescription.id)}/history`)
+      .then(result => result.history
+        .filter(row => Number(row.version) < version)
+        .map(asHistory)
+        .sort((a, b) => b.version - a.version)),
+  };
+  prescriptionHistoryCache.set(prescription.id, entry);
+  // Share in-flight requests, but never retain a failure or let an older request
+  // evict a newer version. A failed history still fails the staff load visibly.
+  entry.history.catch(() => {
+    if (prescriptionHistoryCache.get(prescription.id) === entry) prescriptionHistoryCache.delete(prescription.id);
+  });
+  return entry.history;
+}
+
 export async function fetchPrescriptions(): Promise<AdminPrescription[]> {
   const result = await request<{ prescriptions: Record<string, any>[] }>("/api/prescriptions");
   const prescriptions = result.prescriptions.map(asPrescription);
+  const ids = new Set(prescriptions.map(prescription => prescription.id));
+  for (const id of prescriptionHistoryCache.keys()) {
+    if (!ids.has(id)) prescriptionHistoryCache.delete(id);
+  }
   await Promise.all(prescriptions.map(async prescription => {
-    const history = await request<{ history: Record<string, any>[] }>(`/api/prescriptions/${encodeURIComponent(prescription.id)}/history`);
-    prescription.history = history.history
-      .filter(row => !prescription.version || Number(row.version) < prescription.version)
-      .map(asHistory)
-      .sort((a, b) => b.version - a.version);
+    // Keep cached snapshots isolated from form drafts and comparison views.
+    prescription.history = structuredClone(await fetchPrescriptionHistory(prescription));
   }));
   return prescriptions;
 }
