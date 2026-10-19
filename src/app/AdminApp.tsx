@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { logoutStaff } from "./lib/appointmentApi";
-import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, type SessionUpdatePayload } from "./lib/staffApi";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -2557,19 +2557,25 @@ function SearchSection({ patients, sessions, onNavigate, onAssignPatient }: {
 
 // ─── Live Schedule Section ────────────────────────────────────────────────────
 
-function LiveScheduleSection({ sessions, units, onUpdateSession }: {
+function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome }: {
   sessions: DialysisSession[];
   units: DialysisUnit[];
   onUpdateSession: (id: string, updates: Partial<DialysisSession>) => void;
+  onRecordOutcome: (id: string, status: "Missed" | "Cancelled", reason?: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftVitals, setDraftVitals] = useState({ bp: "", heartRate: "" });
   const [draftComplications, setDraftComplications] = useState<string[]>([]);
   const [draftNote, setDraftNote] = useState("");
+  const [missedReasonDraft, setMissedReasonDraft] = useState("");
+  const [savingOutcome, setSavingOutcome] = useState<"Missed" | "Cancelled" | null>(null);
   const [complicOpen, setComplicOpen] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const todaySessions = sessions.filter(s => s.date === "Today");
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const todaySessions = sessions.filter(s => s.date === "Today" || s.date === today);
+  const scheduled = todaySessions.filter(s => s.status === "Scheduled");
   const running   = todaySessions.filter(s => s.status === "Running");
   const waiting   = todaySessions.filter(s => s.status === "Waiting");
   const completed = todaySessions.filter(s => s.status === "Completed");
@@ -2581,6 +2587,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession }: {
     setDraftVitals(s.vitals ?? { bp: "", heartRate: "" });
     setDraftComplications(s.complications ?? []);
     setDraftNote(s.importantNote ?? "");
+    setMissedReasonDraft(s.missedReason ?? "");
     setSaved(false);
     setComplicOpen(false);
   };
@@ -2594,6 +2601,17 @@ function LiveScheduleSection({ sessions, units, onUpdateSession }: {
   const toggleComplication = (opt: string) => {
     setSaved(false);
     setDraftComplications(prev => prev.includes(opt) ? prev.filter(x => x !== opt) : [...prev, opt]);
+  };
+
+  const handleRecordOutcome = async (status: "Missed" | "Cancelled") => {
+    if (!selectedId || savingOutcome) return;
+    setSavingOutcome(status);
+    try {
+      await onRecordOutcome(selectedId, status, status === "Missed" ? missedReasonDraft.trim() || undefined : undefined);
+      setMissedReasonDraft("");
+    } finally {
+      setSavingOutcome(null);
+    }
   };
 
   const renderCard = (s: DialysisSession) => {
@@ -2644,6 +2662,12 @@ function LiveScheduleSection({ sessions, units, onUpdateSession }: {
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse inline-block" /> Running ({running.length})
               </p>
               <div className="space-y-2">{running.map(renderCard)}</div>
+            </div>
+          )}
+          {scheduled.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-violet-600 uppercase tracking-wider mb-2">Scheduled ({scheduled.length})</p>
+              <div className="space-y-2">{scheduled.map(renderCard)}</div>
             </div>
           )}
           {waiting.length > 0 && (
@@ -2699,6 +2723,31 @@ function LiveScheduleSection({ sessions, units, onUpdateSession }: {
                     ))}
                   </div>
                 </div>
+
+                {(selected.status === "Scheduled" || selected.status === "Waiting") && (
+                  <div className="border-t border-slate-100 pt-5">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Record Session Outcome</h4>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="missed-session-reason">
+                      Reason for missed session <span className="font-normal text-slate-400">(optional)</span>
+                    </label>
+                    <textarea id="missed-session-reason" value={missedReasonDraft}
+                      onChange={e => setMissedReasonDraft(e.target.value)}
+                      placeholder="Add a reason if known…" rows={2}
+                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white resize-none" />
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button type="button" disabled={savingOutcome !== null}
+                        onClick={() => void handleRecordOutcome("Missed")}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50 text-sm font-bold">
+                        <AlertCircle className="w-4 h-4" /> {savingOutcome === "Missed" ? "Saving…" : "Mark as Missed"}
+                      </button>
+                      <button type="button" disabled={savingOutcome !== null}
+                        onClick={() => void handleRecordOutcome("Cancelled")}
+                        className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 disabled:opacity-50 text-sm font-bold">
+                        <Ban className="w-4 h-4" /> {savingOutcome === "Cancelled" ? "Saving…" : "Cancel Session"}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Vitals */}
                 {canEdit && (
@@ -5329,7 +5378,7 @@ export default function AdminApp({
         }
       : machine));
   };
-  const applySessionUpdate = async (id: string, payload: { status: string; [key: string]: unknown }, updates: Partial<DialysisSession>) => {
+  const applySessionUpdate = async (id: string, payload: SessionUpdatePayload, updates: Partial<DialysisSession>) => {
     const result = await updateSession(id, payload);
     setSessions(prev => prev.map(s => s.id === id ? { ...s, ...result.session, ...updates } : s));
     if (result.machine) {
@@ -5404,9 +5453,25 @@ export default function AdminApp({
             sessions={sessions}
             units={units}
             onUpdateSession={async (id, updates) => {
-              const next = updates.status === "Running" ? "running" : updates.status === "Waiting" ? "waiting" : "completed";
+              const currentStatus = updates.status ?? sessions.find(s => s.id === id)?.status ?? "Scheduled";
+              const statusMap: Record<SessionStatus, SessionUpdatePayload["status"]> = {
+                Scheduled: "scheduled", Waiting: "waiting", Running: "running",
+                Completed: "completed", Missed: "missed", Cancelled: "cancelled",
+              };
+              const next = statusMap[currentStatus];
               try { await applySessionUpdate(id, { status: next }, updates); }
               catch (error) { setStaffError(error instanceof Error ? error.message : "Session status could not be saved."); }
+            }}
+            onRecordOutcome={async (id, status, reason) => {
+              const next = status === "Missed" ? "missed" : "cancelled";
+              const updates: Partial<DialysisSession> = { status, attendance: status };
+              const payload: SessionUpdatePayload = { status: next };
+              if (status === "Missed" && reason) {
+                payload.missedReason = reason;
+                updates.missedReason = reason;
+              }
+              try { await applySessionUpdate(id, payload, updates); }
+              catch (error) { setStaffError(error instanceof Error ? error.message : "Session outcome could not be saved."); }
             }}
           />
         );

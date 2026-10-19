@@ -102,6 +102,36 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
   }
 }
 
+async function runBrowserSessionOutcomeTest(patientName, machineCode, reason) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByRole("heading", { name: "Live Dialysis Schedule" }).waitFor();
+    const sessionCard = page.getByRole("button").filter({ hasText: patientName });
+    await sessionCard.waitFor();
+    await sessionCard.click();
+    await page.locator("#missed-session-reason").fill(reason);
+    await page.getByRole("button", { name: "Mark as Missed", exact: true }).click();
+    await page.getByText("Missed", { exact: true }).waitFor();
+
+    await page.getByRole("button", { name: "Machines", exact: true }).click();
+    await page.getByRole("heading", { name: "Machine Management" }).waitFor();
+    const machineCard = page.getByRole("heading", { name: machineCode, exact: true }).locator("xpath=../../..");
+    await machineCard.getByText("Available", { exact: true }).waitFor();
+    assert.equal(await machineCard.getByText("Available", { exact: true }).isVisible(), true, "machine card should show released availability without a refresh");
+  } finally {
+    await browser.close();
+  }
+}
+
 try {
   await expectStatus(request("/api/patients"), 401, "unauthenticated patient read must be denied");
   const admin = await login("admin", process.env.STAFF_ADMIN_PASSWORD);
@@ -157,6 +187,28 @@ try {
   );
   assert.ok(browserSession, "browser assignment must persist a session");
   ids.sessions.push(browserSession.id);
+  const outcomeMachine = await createMachine("OUTCOME", "Negative");
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const outcomeSession = await expectStatus(request("/api/sessions", {
+    method: "POST", cookie: admin,
+    body: { patientId: primary.patient.id, machineId: outcomeMachine.id, unitId: "U1", date: todayDate, slot: "Slot 1" },
+  }), 201, "staff should be able to schedule a session for the live schedule");
+  ids.sessions.push(outcomeSession.session.id);
+  const browserMissedReason = `${run} missed session reason`;
+  await runBrowserSessionOutcomeTest(primary.patient.name, outcomeMachine.code, browserMissedReason);
+  const browserOutcomeSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-updated sessions should be readable");
+  const persistedBrowserOutcome = browserOutcomeSessions.sessions.find(item => item.id === outcomeSession.session.id);
+  assert.equal(persistedBrowserOutcome?.status, "missed", "schedule action should persist the missed outcome");
+  assert.equal(persistedBrowserOutcome?.missedReason, browserMissedReason, "schedule action should persist the optional reason");
+  const noReasonSession = await expectStatus(request("/api/sessions", {
+    method: "POST", cookie: admin,
+    body: { patientId: primary.patient.id, machineId: secondNegativeMachine.id, unitId: "U1", date: todayDate, slot: "Slot 2" },
+  }), 201, "a session without a missed reason should be schedulable");
+  ids.sessions.push(noReasonSession.session.id);
+  const missedWithoutReason = await expectStatus(request(`/api/sessions/${noReasonSession.session.id}`, {
+    method: "PATCH", cookie: doctor, body: { status: "missed" },
+  }), 200, "staff should be able to record a missed session without a reason");
+  assert.equal(missedWithoutReason.session.status, "missed", "missed outcome without a reason should be persisted");
   const date = new Date(Date.now() + 172_800_000).toISOString().slice(0, 10);
   const session = await expectStatus(request("/api/sessions", {
     method: "POST", cookie: doctor,
@@ -183,10 +235,12 @@ try {
     body: { patientId: hcvPatient.patient.id, machineId: secondNegativeMachine.id, unitId: "U1", date, slot: "Slot 2" },
   }), 409, "viral-incompatible machine assignment must conflict");
   assert.ok(hcvMachine, "HCV machine creation is retained for cleanup coverage");
-  await expectStatus(request(`/api/sessions/${session.session.id}`, {
+  const missedUpdate = await expectStatus(request(`/api/sessions/${session.session.id}`, {
     method: "PATCH", cookie: doctor,
     body: { status: "missed", missedReason: "Personal reason", missedReasonOther: `${run} transport disruption` },
   }), 200, "staff should record a missed session");
+  assert.equal(missedUpdate.session.status, "missed", "outcome response should immediately include the missed session status");
+  assert.equal(missedUpdate.machine.id, negativeMachine.id, "outcome response should include the affected machine");
   const missedSessions = await expectStatus(request("/api/sessions", { cookie: doctor }), 200, "updated sessions should be readable");
   const persistedMissed = missedSessions.sessions.find(item => item.id === session.session.id);
   assert.equal(persistedMissed?.status, "missed", "session status must persist as missed");
@@ -196,9 +250,12 @@ try {
   const stillScheduledMachine = machineAfterMissed.machines.find(item => item.id === negativeMachine.id);
   assert.equal(stillScheduledMachine?.status, "scheduled", "machine should remain scheduled while another active session remains");
   assert.equal(stillScheduledMachine?.next_patient, primary.patient.name, "machine should expose the next remaining active patient");
-  await expectStatus(request(`/api/sessions/${browserSession.id}`, {
+  const cancelledUpdate = await expectStatus(request(`/api/sessions/${browserSession.id}`, {
     method: "PATCH", cookie: doctor, body: { status: "cancelled" },
   }), 200, "staff should be able to cancel a scheduled session");
+  assert.equal(cancelledUpdate.session.status, "cancelled", "cancellation response should immediately include the cancelled session status");
+  assert.equal(cancelledUpdate.machine.id, negativeMachine.id, "cancellation response should include the affected machine");
+  assert.equal(cancelledUpdate.machine.status, "available", "cancellation response should show the released machine");
   const machineAfterCancellation = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machine availability should refresh after a cancelled session");
   const releasedMachine = machineAfterCancellation.machines.find(item => item.id === negativeMachine.id);
   assert.equal(releasedMachine?.status, "available", "machine should be released after its last active session is cancelled");

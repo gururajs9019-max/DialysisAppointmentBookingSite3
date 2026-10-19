@@ -210,7 +210,13 @@ export const updateMachine = (id: string, changes: Pick<Machine, "status"> & Par
   request(`/api/machines/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
 export const createMachine = (machine: { unitId: string; code: string; name: string; category: string; status: string; notes?: string }) =>
   request<{ machine: Record<string, unknown> }>("/api/machines", { method: "POST", body: JSON.stringify(machine) }, "save");
-export const updateSession = async (id: string, payload: { status: string; [key: string]: unknown }) => {
+export type SessionUpdatePayload = {
+  status: "scheduled" | "waiting" | "running" | "completed" | "missed" | "cancelled";
+  missedReason?: string;
+  missedReasonOther?: string;
+  [key: string]: unknown;
+};
+export const updateSession = async (id: string, payload: SessionUpdatePayload) => {
   const result = await request<{ session: Record<string, unknown>; machine?: Record<string, unknown> }>(
     `/api/sessions/${encodeURIComponent(id)}`,
     { method: "PATCH", body: JSON.stringify(payload) },

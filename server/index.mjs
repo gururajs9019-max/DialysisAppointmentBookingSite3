@@ -246,6 +246,7 @@ async function api(req, res, url) {
     if (parts[1]==="sessions" && parts.length===3 && req.method==="PATCH") {
       const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req));
       if(!SESSION_STATUSES.includes(x.status)) throw httpError(400,"Invalid session status.");
+      if (x.status === "missed" && "missedReason" in x) x.missedReason = text(x.missedReason, "missed reason", { max: 500 });
       const result = await transaction(async client => {
         const existing = (await client.query("SELECT machine_id FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
         if (!existing) throw httpError(404, "Session was not found.");
