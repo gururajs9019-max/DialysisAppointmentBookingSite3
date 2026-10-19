@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { access, cp, mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -135,9 +135,57 @@ try {
   await check("/assets/unreadable.js", 500, /text\/plain/, "Unable to load application");
   await check("/", 200, /text\/html/, html);
 
+  // Use synthetic files, never real credentials, to prove links cannot publish
+  // files outside dist (including a sibling with the same directory prefix).
+  const publishedRoot = join(fixtureRoot, "dist");
+  const outsideBody = "synthetic-outside-published-site-marker";
+  const insideBody = "synthetic-published-asset-marker";
+  await writeFile(join(fixtureRoot, "private.js"), outsideBody);
+  await mkdir(join(fixtureRoot, "dist-private"));
+  await writeFile(join(fixtureRoot, "dist-private", "private.js"), outsideBody);
+  await writeFile(join(publishedRoot, "assets", "contained.js"), insideBody);
+  await symlink("../../private.js", join(publishedRoot, "assets", "outside-relative.js"));
+  await symlink(join(fixtureRoot, "private.js"), join(publishedRoot, "outside-absolute"));
+  await symlink("outside-relative.js", join(publishedRoot, "assets", "outside-chain.js"));
+  await symlink(join(fixtureRoot, "dist-private"), join(publishedRoot, "outside-directory"), "dir");
+  await symlink(join(fixtureRoot, "dist-private", "private.js"), join(publishedRoot, "assets", "outside-prefix.js"));
+  await symlink("contained.js", join(publishedRoot, "assets", "inside-link.js"));
+  await symlink("assets", join(publishedRoot, "inside-directory"), "dir");
+  const escapingLinks = [
+    "/assets/outside-relative.js",
+    "/outside-absolute",
+    "/assets/outside-chain.js?cache=old",
+    "/outside-directory/private.js",
+    "/assets/outside-prefix.js",
+  ];
+  for (const path of escapingLinks) {
+    await check(path, 404, /text\/plain/, "Not found");
+    await check(path, 404, /text\/plain/, "", { method: "HEAD" });
+  }
+  await Promise.all(escapingLinks.map(path => check(path, 404, /text\/plain/, "Not found")));
+  await check("/assets/inside-link.js", 200, /text\/javascript/, insideBody);
+  await check("/inside-directory/contained.js", 200, /text\/javascript/, insideBody);
+  await check("/", 200, /text\/html/, html);
+  for (const path of [
+    "/../private.js", "/%2e%2e/private.js", "/assets/../../private.js",
+    "/assets/%2e%2e/%2e%2e/private.js", "/..%2fprivate.js",
+    "/assets/..%2f..%2fprivate.js",
+  ]) {
+    const result = await rawHttp(port, `GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+    assert.match(result, /^HTTP\/1.1 404 /, `${path} must not escape the published site`);
+    assert.doesNotMatch(result, /synthetic-outside-published-site-marker/);
+  }
+
   const fixtureIndex = join(fixtureRoot, "dist", "index.html");
   await rename(fixtureIndex, `${fixtureIndex}.saved`);
   try {
+    // The SPA fallback must use the same containment check as direct assets.
+    await symlink(join(fixtureRoot, "private.js"), fixtureIndex);
+    for (const path of ["/", "/staff/sessions/missing", "/patient", "/index.html"]) {
+      await check(path, 404, /text\/plain/, "Not found");
+      await check(path, 404, /text\/plain/, "", { method: "HEAD" });
+    }
+    await rm(fixtureIndex);
     for (const path of ["/", "/staff/sessions/missing", "/index.html"]) {
       await check(path, 500, /text\/plain/, "Unable to load application");
     }
@@ -153,6 +201,8 @@ try {
   await check("/", 200, /text\/html/, html);
   await check("/staff/sessions/missing", 200, /text\/html/, html);
   assert.ok(!stderr.includes("ERR_HTTP_HEADERS_SENT"), "file failures must not write headers twice");
+  assert.equal(child.pid, originalPid, "file containment checks must preserve the same process");
+  console.log("production file-link containment regressions passed");
   console.log("production static-file regressions passed");
   if (!staticOnly) {
     await runProductionIntegration(baseUrl);

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, extname, join, normalize } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { dirname, extname, isAbsolute, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { staffServices } from "./staff-services.mjs";
@@ -511,6 +511,18 @@ async function api(req, res, url) {
 async function start() {
   const production = process.env.NODE_ENV === "production";
   const distRoot = normalize(join(__dirname, "..", "dist"));
+  async function readPublishedFile(filePath) {
+    // Lexical containment alone does not stop a symlink (including a parent
+    // directory link) from pointing outside the published site.
+    const [canonicalRoot, canonicalFile] = await Promise.all([realpath(distRoot), realpath(filePath)]);
+    const fromRoot = relative(canonicalRoot, canonicalFile);
+    if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+      const error = new Error("Not found");
+      error.code = "ASSET_OUTSIDE_ROOT";
+      throw error;
+    }
+    return readFile(canonicalFile);
+  }
   async function serveProductionAsset(res, pathname) {
     const requestedPath = normalize(join(distRoot, pathname === "/" ? "index.html" : pathname));
     if (requestedPath !== distRoot && !requestedPath.startsWith(`${distRoot}/`)) {
@@ -530,16 +542,17 @@ async function start() {
     let content;
     try {
       try {
-        content = await readFile(filePath);
+        content = await readPublishedFile(filePath);
       } catch (error) {
         if (!isMissingFile(error) || !isAppRoute || pathname === "/") throw error;
         filePath = join(distRoot, "index.html");
-        content = await readFile(filePath);
+        content = await readPublishedFile(filePath);
       }
     } catch (error) {
       // Missing assets are not app routes. An unavailable app shell or another
       // read failure is a server error, and must not trigger a second response.
-      const status = isMissingFile(error) && !isAppRoute && filePath !== join(distRoot, "index.html") ? 404 : 500;
+      const status = error.code === "ASSET_OUTSIDE_ROOT" ||
+        (isMissingFile(error) && !isAppRoute && filePath !== join(distRoot, "index.html")) ? 404 : 500;
       if (status === 500) console.error("Production asset error:", error);
       res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
       res.end(status === 404 ? "Not found" : "Unable to load application");
