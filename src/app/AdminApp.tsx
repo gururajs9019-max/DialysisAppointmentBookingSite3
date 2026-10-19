@@ -210,11 +210,6 @@ const BASE_CATEGORIES: MachineTypeConfig[] = [
   { id: "RVD (HIV)",  label: "RVD (HIV)" },
 ];
 
-const DOCTORS = [
-  "Dr. Suresh Pillai", "Dr. Anita Krishnamurthy", "Dr. Kavita Nair",
-  "Dr. Ramesh Babu", "Dr. Meena Gupta",
-];
-
 const INITIAL_DOCTORS: DoctorRecord[] = [
   { id: "DOC001", name: "Dr. Suresh Pillai",        email: "s.pillai@kmcri.in",          employeeId: "EMP-101", specialization: "Nephrology",             phone: "Contact via portal", status: "Active",   dateAdded: "Recently", hasHistoricalRecords: true },
   { id: "DOC002", name: "Dr. Anita Krishnamurthy",  email: "a.krishnamurthy@kmcri.in",   employeeId: "EMP-102", specialization: "Nephrology",             phone: "Contact via portal", status: "Active",   dateAdded: "Recently", hasHistoricalRecords: true },
@@ -3008,6 +3003,17 @@ function recordValue(record: Record<string, unknown> | undefined, ...keys: strin
   return keys.map(key => record[key]).find(value => value !== null && value !== undefined && value !== "");
 }
 
+function patientComorbidityValue(patient: Patient, key: "hypertension" | "diabetes", legacyValue: unknown): string {
+  const flags = patient.medicalInfo?.comorbidityFlags as Record<string, unknown> | undefined;
+  if (typeof flags?.[key] === "boolean") return flags[key] ? "Yes" : "No";
+  return firstDetailValue(legacyValue, patient.comorbidities.toLowerCase().includes(key) ? "Yes" : undefined);
+}
+
+function weightDetailValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "Not available";
+  return `${formatDetailValue(value)} kg`;
+}
+
 function blankPrescription(patient: Patient): AdminPrescription {
   return {
     id: "", patientId: patient.id, patientName: patient.name, patientUhid: patient.uhid,
@@ -4137,14 +4143,10 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
 
   // Medical Information
   const [nativeKidneyDisease, setNativeKidneyDisease] = useState("");
-  const [causeOfFailure, setCauseOfFailure]           = useState("");
-  const [nephrologist, setNephrologist]               = useState("");
   const [insurance, setInsurance]                     = useState("");
   const [comorbidities, setComorbidities]             = useState<string[]>([]);
-  const [comorbHypertensionVal, setComorbHypertensionVal] = useState("");
-  const [comorbDiabetesVal, setComorbDiabetesVal]         = useState("");
-  const [comorbOthersText, setComorbOthersText]           = useState("");
-  const [comorbOthersVal, setComorbOthersVal]             = useState("");
+  const [dryWeight, setDryWeight] = useState("");
+  const [weightGain, setWeightGain] = useState("");
   const [remarks, setRemarks]                         = useState("");
   const [accessAvf, setAccessAvf]                     = useState("");
   const [accessTunnelled, setAccessTunnelled]         = useState("");
@@ -4209,7 +4211,8 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
     registrationDate:   useRef<HTMLDivElement>(null),
     patientStatus:      useRef<HTMLDivElement>(null),
     nativeKidneyDisease:useRef<HTMLDivElement>(null),
-    nephrologist:       useRef<HTMLDivElement>(null),
+    dryWeight:          useRef<HTMLDivElement>(null),
+    weightGain:         useRef<HTMLDivElement>(null),
     access:              useRef<HTMLDivElement>(null),
     opdIpd:              useRef<HTMLDivElement>(null),
     dialysisDaysPerWeek: useRef<HTMLDivElement>(null),
@@ -4245,8 +4248,10 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       e.patientStatus = "Patient status is required.";
     if (!nativeKidneyDisease.trim())
       e.nativeKidneyDisease = "Native kidney disease is required.";
-    if (!nephrologist)
-      e.nephrologist = "Please assign a treating nephrologist.";
+    if (dryWeight !== "" && (!Number.isFinite(Number(dryWeight)) || Number(dryWeight) <= 0))
+      e.dryWeight = "Dry weight must be a number greater than 0 kg.";
+    if (weightGain !== "" && (!Number.isFinite(Number(weightGain)) || Number(weightGain) < 0))
+      e.weightGain = "Weight gain must be a number of at least 0 kg.";
     if (!accessAvf && !accessTunnelled && !accessTemporary)
       e.access = "Please enter a value for at least one access type (AVF, Tunnelled Catheter, or Temporary Catheter).";
     if (!opdIpd)
@@ -4282,16 +4287,21 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       const uhid = `KMCRI-${Date.now()}`;
       const result = await createPatient({
         uhid, name, age: Number(age), gender, mobile, address, city, bloodGroup,
-        primaryDisease: nativeKidneyDisease, causeOfFailure, treatingNephrologist: nephrologist,
-        insurance, comorbidities: comorbidities.map(condition=>condition==="Others"?(comorbOthersText.trim()||"Others"):condition).join(", "), remarks, dialysisStartDate: registrationDate,
+        primaryDisease: nativeKidneyDisease,
+        insurance, comorbidities: comorbidities.join(", "), remarks, dialysisStartDate: registrationDate,
         treatmentStatus: patientStatus, viralStatus: { hepatitisB: hbsAg, hepatitisC: hcv, hiv, other: "" },
         dialysisDaysPerWeek, dialysisDays,
         dateOfBirth: dobYear && dobMonth && dobDay ? `${dobYear}-${String(["January","February","March","April","May","June","July","August","September","October","November","December"].indexOf(dobMonth)+1).padStart(2,"0")}-${dobDay.padStart(2,"0")}` : "",
         registeredDate: registrationDate,
         registrationFields: { registrationDate, nativeKidneyDisease, patientStatus, opdIpd },
         medicalInfo: {
-          hypertension: comorbHypertensionVal, diabetes: comorbDiabetesVal,
-          otherComorbidities: { name: comorbOthersText, value: comorbOthersVal },
+          comorbidityFlags: {
+            hypertension: comorbidities.includes("Hypertension"),
+            diabetes: comorbidities.includes("Diabetes"),
+            others: comorbidities.includes("Others"),
+          },
+          dryWeight: dryWeight === "" ? "" : Number(dryWeight),
+          weightGain: weightGain === "" ? "" : Number(weightGain),
           avFistula: accessAvf, permacath: accessTunnelled, temporaryCatheter: accessTemporary, opdIpd,
           dialysisAccess: [accessAvf && accessAvf !== "No" ? "AVF" : "", accessTunnelled && accessTunnelled !== "No" ? "Permacath" : "", accessTemporary && accessTemporary !== "No" ? "Temp Catheter" : ""].filter(Boolean).join(", "),
         },
@@ -4325,9 +4335,8 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           setSubmitted(false); setAttempted(false);
           setName(""); setAge(""); setGender(""); setMobile(""); setAddress(""); setCity("");
           setRegistrationDate(""); setPatientStatus(""); setNativeKidneyDisease("");
-          setCauseOfFailure(""); setNephrologist(""); setInsurance("");
-          setComorbidities([]); setComorbHypertensionVal(""); setComorbDiabetesVal("");
-          setComorbOthersText(""); setComorbOthersVal("");
+          setInsurance("");
+          setComorbidities([]); setDryWeight(""); setWeightGain("");
           setRemarks(""); setAccessAvf(""); setAccessTunnelled(""); setAccessTemporary(""); setOpdIpd("");
           setCbcHb(""); setCbcTlc(""); setCbcPlt(""); setCbcMcv("");
           setSerumFerritin(""); setSerumCalcium("");
@@ -4491,22 +4500,6 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           </div>
 
           <div>
-            <label className={labelCls}>Cause of Failure</label>
-            <input value={causeOfFailure} onChange={e => setCauseOfFailure(e.target.value)}
-              className={fldCls(false)} placeholder="e.g. Diabetic Nephropathy" />
-          </div>
-
-          <div ref={refs.nephrologist}>
-            <label className={labelCls}>Treating Nephrologist *</label>
-            <select value={nephrologist} onChange={e => setNephrologist(e.target.value)}
-              className={fldCls(!!errors.nephrologist)}>
-              <option value="">Select doctor…</option>
-              {DOCTORS.map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-            <RegErrMsg error={errors.nephrologist} />
-          </div>
-
-          <div>
             <label className={labelCls}>Scheme</label>
             <input value={insurance} onChange={e => setInsurance(e.target.value)}
               className={fldCls(false)} placeholder="Scheme or None" />
@@ -4514,99 +4507,20 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
 
           <div className="md:col-span-2">
             <label className={labelCls}>Comorbidities</label>
-            <div className="space-y-3 mt-1">
-              {/* Hypertension */}
-              <div>
-                <button type="button"
-                  onClick={() => {
-                    toggleArr(comorbidities, setComorbidities, "Hypertension");
-                    if (comorbidities.includes("Hypertension")) setComorbHypertensionVal("");
-                  }}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all ${
-                    comorbidities.includes("Hypertension")
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1">
+              {(["Hypertension", "Diabetes", "Others"] as const).map(condition => (
+                <label key={condition}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 text-sm font-medium cursor-pointer transition-all ${
+                    comorbidities.includes(condition)
                       ? "border-violet-500 bg-violet-50 text-violet-800"
                       : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
                   }`}>
-                  <div className={`w-4 h-4 rounded flex items-center justify-center border-2 shrink-0 ${comorbidities.includes("Hypertension") ? "border-violet-500 bg-violet-500" : "border-slate-300"}`}>
-                    {comorbidities.includes("Hypertension") && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                  Hypertension
-                </button>
-                {comorbidities.includes("Hypertension") && (
-                  <div className="ml-7 mt-2">
-                    <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Blood Pressure / Value</label>
-                    <input type="number" step="any" min="0" value={comorbHypertensionVal}
-                      onChange={e => setComorbHypertensionVal(e.target.value)}
-                      placeholder="e.g. 140"
-                      className={fldCls(false) + " max-w-xs"} />
-                  </div>
-                )}
-              </div>
-
-              {/* Diabetes */}
-              <div>
-                <button type="button"
-                  onClick={() => {
-                    toggleArr(comorbidities, setComorbidities, "Diabetes");
-                    if (comorbidities.includes("Diabetes")) setComorbDiabetesVal("");
-                  }}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all ${
-                    comorbidities.includes("Diabetes")
-                      ? "border-violet-500 bg-violet-50 text-violet-800"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
-                  }`}>
-                  <div className={`w-4 h-4 rounded flex items-center justify-center border-2 shrink-0 ${comorbidities.includes("Diabetes") ? "border-violet-500 bg-violet-500" : "border-slate-300"}`}>
-                    {comorbidities.includes("Diabetes") && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                  Diabetes
-                </button>
-                {comorbidities.includes("Diabetes") && (
-                  <div className="ml-7 mt-2">
-                    <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Blood Sugar / Value</label>
-                    <input type="number" step="any" min="0" value={comorbDiabetesVal}
-                      onChange={e => setComorbDiabetesVal(e.target.value)}
-                      placeholder="e.g. 126"
-                      className={fldCls(false) + " max-w-xs"} />
-                  </div>
-                )}
-              </div>
-
-              {/* Others */}
-              <div>
-                <button type="button"
-                  onClick={() => {
-                    toggleArr(comorbidities, setComorbidities, "Others");
-                    if (comorbidities.includes("Others")) { setComorbOthersText(""); setComorbOthersVal(""); }
-                  }}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all ${
-                    comorbidities.includes("Others")
-                      ? "border-violet-500 bg-violet-50 text-violet-800"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
-                  }`}>
-                  <div className={`w-4 h-4 rounded flex items-center justify-center border-2 shrink-0 ${comorbidities.includes("Others") ? "border-violet-500 bg-violet-500" : "border-slate-300"}`}>
-                    {comorbidities.includes("Others") && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                  Others
-                </button>
-                {comorbidities.includes("Others") && (
-                  <div className="ml-7 mt-2 space-y-2">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Specify Other Condition</label>
-                      <input type="text" value={comorbOthersText}
-                        onChange={e => setComorbOthersText(e.target.value)}
-                        placeholder="e.g. Peripheral Neuropathy"
-                        className={fldCls(false) + " max-w-xs"} />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Value</label>
-                      <input type="number" step="any" min="0" value={comorbOthersVal}
-                        onChange={e => setComorbOthersVal(e.target.value)}
-                        placeholder="Numeric value"
-                        className={fldCls(false) + " max-w-xs"} />
-                    </div>
-                  </div>
-                )}
-              </div>
+                  <input type="checkbox" checked={comorbidities.includes(condition)}
+                    onChange={() => toggleArr(comorbidities, setComorbidities, condition)}
+                    className="h-4 w-4 accent-violet-600" />
+                  {condition}
+                </label>
+              ))}
             </div>
           </div>
 
@@ -4614,6 +4528,27 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             <label className={labelCls}>Remarks</label>
             <input value={remarks} onChange={e => setRemarks(e.target.value)}
               className={fldCls(false)} placeholder="Special instructions or notes" />
+          </div>
+        </div>
+
+        {/* Vitals */}
+        <div className="border-t border-slate-100 pt-5">
+          <h4 className="font-bold text-slate-800 mb-4">Vitals</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div ref={refs.dryWeight}>
+              <label className={labelCls}>Dry Weight (kg)</label>
+              <input type="number" min="0.1" step="any" inputMode="decimal" value={dryWeight}
+                onChange={e => setDryWeight(e.target.value)} placeholder="e.g. 52.5"
+                className={fldCls(!!errors.dryWeight)} />
+              <RegErrMsg error={errors.dryWeight} />
+            </div>
+            <div ref={refs.weightGain}>
+              <label className={labelCls}>Weight Gain (kg)</label>
+              <input type="number" min="0" step="any" inputMode="decimal" value={weightGain}
+                onChange={e => setWeightGain(e.target.value)} placeholder="e.g. 2.5"
+                className={fldCls(!!errors.weightGain)} />
+              <RegErrMsg error={errors.weightGain} />
+            </div>
           </div>
         </div>
 
@@ -4685,19 +4620,26 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
               </div>
             </RegInvestRow>
 
-            {/* Serum Ferritin */}
-            <RegInvestRow label="Serum Ferritin">
-              <input type="number" step="any" min="0" value={serumFerritin}
-                onChange={e => setSerumFerritin(e.target.value)} placeholder="—"
-                className="w-36 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
-            </RegInvestRow>
-
-            {/* Serum Calcium */}
-            <RegInvestRow label="Serum Calcium">
-              <input type="number" step="any" min="0" value={serumCalcium}
-                onChange={e => setSerumCalcium(e.target.value)} placeholder="—"
-                className="w-36 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
-            </RegInvestRow>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 py-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Ferritin</label>
+                <input type="number" step="any" min="0" value={serumFerritin}
+                  onChange={e => setSerumFerritin(e.target.value)} placeholder="—"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Calcium</label>
+                <input type="number" step="any" min="0" value={serumCalcium}
+                  onChange={e => setSerumCalcium(e.target.value)} placeholder="—"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Phosphorous</label>
+                <input type="number" step="any" min="0" value={serumPhos}
+                  onChange={e => setSerumPhos(e.target.value)} placeholder="—"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+              </div>
+            </div>
 
             {/* Thyroid Profile */}
             <RegInvestRow label="Thyroid Profile">
@@ -4736,12 +4678,6 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
               </div>
             </RegInvestRow>
 
-            {/* Serum Phosphorous */}
-            <RegInvestRow label="Serum Phosphorous">
-              <input type="number" step="any" min="0" value={serumPhos}
-                onChange={e => setSerumPhos(e.target.value)} placeholder="—"
-                className="w-36 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
-            </RegInvestRow>
           </div>
         </div>
 
@@ -4751,7 +4687,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             <FlaskConical className="w-4 h-4 text-blue-600" />
             <h4 className="font-bold text-slate-800">LFT</h4>
           </div>
-          <div className="divide-y divide-slate-50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
             {([
               ["Total Protein",         "lftTotalProtein"],
               ["Albumin",               "lftAlbumin"],
@@ -4770,11 +4706,12 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
                 :                                   [lftAlp,              setLftAlp];
               const [val, setter] = stateKey as [string, (v: string) => void];
               return (
-                <RegInvestRow key={lbl} label={lbl}>
+                <div key={lbl} className="min-w-0">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{lbl}</label>
                   <input type="number" step="any" min="0" value={val}
                     onChange={e => setter(e.target.value)} placeholder="—"
-                    className="w-36 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
-                </RegInvestRow>
+                    className="w-full min-w-0 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+                </div>
               );
             })}
           </div>
@@ -4784,8 +4721,8 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       {/* ── Viral Panel ── */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">
         <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-3">Viral Panel</h3>
-        <div className="grid grid-cols-3 gap-4">
-          {([["HBsAg (Hep B)", hbsAg, setHbsAg], ["HCV (Hep C)", hcv, setHcv], ["HIV", hiv, setHiv]] as const).map(([lbl, val, setter]) => (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {([["HBsAg (Hep B)", hbsAg, setHbsAg], ["Anti HCV", hcv, setHcv], ["HIV I/II", hiv, setHiv]] as const).map(([lbl, val, setter]) => (
             <div key={lbl}>
               <label className={labelCls}>{lbl} *</label>
               <select value={val} onChange={e => setter(e.target.value)} className={fldCls(false)}>

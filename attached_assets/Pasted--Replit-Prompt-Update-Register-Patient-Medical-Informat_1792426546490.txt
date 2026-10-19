@@ -1,0 +1,187 @@
+# Replit Prompt: Update Register Patient – Medical Information, Viral Panel, and Vitals
+
+I want to make a few changes to the existing **Dialysis Slot Manager** application.
+
+Implement the following frontend updates in the **Administrator Portal → Register Patient** page. Inspect the existing code and form structure before making changes.
+
+**Important:** This is an existing application. Modify the current implementation instead of rebuilding the page. Preserve the existing design, functionality, database integration, and validation wherever applicable.
+
+## 1. Remove Unnecessary Fields from Register Patient
+
+In **Administrator Portal → Register Patient → Medical Information**, remove the following fields completely from the registration form:
+
+- Cause of Failure
+- Treating Nephrologist
+
+Requirements:
+- Remove the field labels, input controls, and associated UI elements.
+- Remove any frontend validation that requires these fields.
+- Ensure the patient registration form can be submitted successfully without these fields.
+- If these fields are referenced in the frontend submission logic, update it appropriately.
+- Do not delete unrelated patient information or historical medical records from the database.
+
+If the backend currently requires either field, adjust the validation and submission logic so these fields are optional or omitted, as appropriate, without breaking existing records or other application features.
+
+## 2. Hypertension, Diabetes, and Others — Checkbox Only
+
+In the **Comorbidities** section of Medical Information, the fields currently contain a tick/checkbox option and a numerical value input.
+
+Change this section so that each comorbidity has **only a checkbox**.
+
+Apply this change to:
+- Hypertension
+- Diabetes
+- Others
+
+Requirements:
+- Remove all numerical value inputs associated with these three options.
+- Keep the existing checkbox/tick-mark controls.
+- The administrator should be able to select or deselect each option independently.
+- Preserve the selected checkbox values when saving the patient.
+- Ensure the checkbox state is correctly loaded when editing an existing patient.
+- Do not change other comorbidity fields unless required for consistency with these three options.
+
+Example:
+
+Comorbidities
+
+☐ Hypertension
+
+☐ Diabetes
+
+☐ Others
+
+Do not display any numerical input next to these checkboxes.
+
+## 3. Reposition Serum Calcium and Serum Phosphorous
+
+Inside **Medical Information → Basic Investigation**, locate these three investigation fields:
+
+- Serum Ferritin
+- Serum Calcium
+- Serum Phosphorous
+
+Display all three fields **side by side in the same row** on desktop and wider screens.
+
+Desired layout:
+
+| Serum Ferritin | Serum Calcium | Serum Phosphorous |
+|---|---|---|
+| Existing input/control | Existing input/control | Existing input/control |
+
+Requirements:
+- Keep the existing input types and selection options for all three investigations.
+- Serum Ferritin, Serum Calcium, and Serum Phosphorous must remain separate fields.
+- Do not change their stored values or validation rules unnecessarily.
+- On smaller screens, allow the fields to wrap responsively without overlapping or becoming difficult to use.
+- Keep consistent spacing, alignment, and field widths.
+
+## 4. LFT — Display All Attributes Side by Side
+
+Locate the **LFT (Liver Function Test)** section in the Register Patient form.
+
+Currently, its attributes are displayed vertically, one below another. Change the layout so that all existing LFT attributes appear side by side in a horizontal grid instead of a single column.
+
+Requirements:
+- Keep every existing LFT attribute.
+- Do not remove, rename, or change the data type of any LFT field.
+- Display the attributes in the same row wherever screen width permits.
+- Use a responsive grid or flex layout.
+- On smaller screens, allow wrapping into additional rows as needed.
+- Ensure labels and input controls remain readable and aligned.
+- Preserve all existing validation, state management, and database saving functionality.
+
+Do not hardcode a fixed width that causes horizontal overflow.
+
+## 5. Rename Viral Panel Attributes
+
+Inside the **Viral Panel** section, update the following labels:
+
+- Change **HCV** to **Anti HCV**.
+- Change **HIV** to **HIV I/II** (display the name as `HIV Ⅰ/Ⅱ` if supported by the existing font).
+
+Requirements:
+- Change the visible labels throughout the Register Patient form and related patient medical-information displays where these labels refer to the same viral markers.
+- Preserve the existing underlying data and stored values.
+- Do not create duplicate viral panel fields.
+- Do not change HBsAg or any other viral marker.
+- Ensure existing patient records continue displaying their previously saved results correctly.
+
+These changes are label updates, not changes to the medical meaning or testing logic.
+
+## 6. Add Dry Weight and Weight Gain to Vitals
+
+Inside **Medical Information → Vitals**, add two new attributes:
+
+### Dry Weight
+- Label: Dry Weight
+- Input type: Number
+- Accept numeric weight values.
+- Use the existing weight unit convention in the application. If no unit is currently specified, display the unit as kg.
+- Support appropriate decimal values, such as `52.5`.
+
+### Weight Gain
+- Label: Weight Gain
+- Input type: Number
+- Accept numeric weight values.
+- Use the same unit convention as Dry Weight.
+- Support appropriate decimal values, such as `2.5`.
+
+Requirements:
+- Place both fields within the existing Vitals section.
+- Display them side by side on desktop and wider screens.
+- Allow them to wrap responsively on smaller screens.
+- Prevent non-numeric input.
+- Allow decimal values rather than restricting the fields to whole numbers.
+- Apply reasonable minimum-value validation without preventing legitimate clinical entries.
+- Do not automatically calculate or overwrite either value unless the existing application already has an explicit, reliable calculation rule.
+- Save both values to the database and load them correctly when viewing or editing a patient.
+
+If database columns or schema changes are needed, implement the appropriate migration safely. Do not store these values only in frontend state.
+
+## 7. Preserve Existing Form Functionality
+
+After these changes, verify that:
+
+- New patients can be registered successfully.
+- Existing patient records can be viewed and edited.
+- All remaining Medical Information fields continue working.
+- Checkbox selections are saved and restored correctly.
+- Serum Ferritin, Serum Calcium, and Serum Phosphorous retain their existing behavior.
+- LFT attributes retain their existing data and validation.
+- Viral Panel results remain associated with the correct markers.
+- Dry Weight and Weight Gain persist after saving and refreshing the page.
+- Removing Cause of Failure and Treating Nephrologist does not cause registration errors.
+
+## 8. Scope and Safety
+
+Make these changes only where required.
+
+- Do not redesign the entire Register Patient page.
+- Do not modify dialysis machine allocation or slot scheduling.
+- Do not change doctor prescription functionality.
+- Do not modify Doctor Portal or Patient Portal workflows.
+- Do not delete patient records or existing medical investigation results.
+- Do not change database column names unnecessarily.
+- Do not introduce mock data or hardcoded patient information.
+- Preserve existing authentication, authorization, and backend security rules.
+
+If a shared medical-information component is used by multiple portals, make sure any label or layout updates do not unintentionally break those portals.
+
+## 9. Final Testing
+
+After implementation, test the following:
+
+1. Cause of Failure and Treating Nephrologist are no longer displayed in Register Patient.
+2. Hypertension, Diabetes, and Others show checkboxes only, with no numerical inputs.
+3. Serum Ferritin, Serum Calcium, and Serum Phosphorous appear side by side.
+4. All LFT attributes appear in a horizontal responsive layout.
+5. HCV displays as Anti HCV.
+6. HIV displays as HIV I/II.
+7. Dry Weight and Weight Gain accept decimal numbers.
+8. Both new weight fields save correctly and remain populated after refresh.
+9. Existing patients' medical records remain intact.
+10. The registration page works on desktop, tablet, and mobile.
+11. No unrelated portal or existing functionality is broken.
+
+**Implementation instruction:** First inspect the existing frontend components, form validation, state management, API calls, and database schema. Then implement and test these changes in the existing application. Do not stop at making visual changes; ensure every affected field continues to save and load correctly.
