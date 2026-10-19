@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { runPrescriptionConflictUiTest } from "./prescription-conflict-ui.mjs";
+import { runPrescriptionDraftUiTest } from "./prescription-draft-ui.mjs";
 
 const baseUrl = process.env.TEST_BASE_URL || "http://127.0.0.1:5000";
 const run = `RX-CONFLICT-${randomUUID().slice(0, 12)}`;
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 const ids = [];
-let prescriptionId, patientId;
+let prescriptionId, patientId, blankPatientId;
 
 async function request(path, { method = "GET", body, cookie } = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -96,15 +97,20 @@ try {
   assert.ok(!Object.hasOwn(snapshot, "baseVersion"), "base version must not enter clinical snapshots");
   assert.notEqual(snapshot.patientId, "untrusted", "revision must not change identity metadata");
   await runPrescriptionConflictUiTest({ baseUrl, patient, prescriptionId });
+  const { patient: blankPatient } = await expectStatus(request("/api/patients", {
+    method: "POST", cookie: admin, body: { uhid: `${run}-NEW`, name: `${run} New patient` },
+  }), 201);
+  blankPatientId = blankPatient.id; ids.push(blankPatientId);
+  await runPrescriptionDraftUiTest({ baseUrl, patient, blankPatient, prescriptionId });
   console.log("prescription concurrency tests passed (simultaneous Administrator/Doctor saves, validation, side effects, immutable history)");
 } finally {
   try {
-    await db.query("DELETE FROM audit_logs WHERE entity_id=ANY($1::text[])", [ids]);
+    const patientIds = [patientId, blankPatientId].filter(Boolean);
+    const rxIds = (await db.query("SELECT id FROM prescriptions WHERE patient_id=ANY($1::text[])", [patientIds])).rows.map(row => row.id);
+    await db.query("DELETE FROM audit_logs WHERE entity_id=ANY($1::text[])", [[...ids, ...rxIds]]);
     await db.query("DELETE FROM notifications WHERE detail LIKE $1", [`%${run}%`]);
-    if (prescriptionId) {
-      await db.query("DELETE FROM prescription_versions WHERE prescription_id=$1", [prescriptionId]);
-      await db.query("DELETE FROM prescriptions WHERE id=$1", [prescriptionId]);
-    }
-    if (patientId) await db.query("DELETE FROM patients WHERE id=$1", [patientId]);
+    await db.query("DELETE FROM prescription_versions WHERE prescription_id=ANY($1::text[])", [rxIds]);
+    await db.query("DELETE FROM prescriptions WHERE patient_id=ANY($1::text[])", [patientIds]);
+    await db.query("DELETE FROM patients WHERE id=ANY($1::text[])", [patientIds]);
   } finally { await db.end(); }
 }

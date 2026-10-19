@@ -4,6 +4,7 @@ import type { AdminPrescription, RxDialysis, RxMedication, RxNotification } from
 import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, computeChangedFields, formatRxTimestamp } from "../../AdminApp";
 import { updatePrescription, PrescriptionConflictError } from "../../lib/staffApi";
 import { PrescriptionConflict } from "../PrescriptionConflict";
+import { usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
 
 interface DoctorPrescriptionProps {
   onNavigate: (view: string) => void;
@@ -11,6 +12,7 @@ interface DoctorPrescriptionProps {
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   doctorName: string;
   addRxNotification: (n: Omit<RxNotification, "id" | "read">) => void;
+  onDraftStateChange: PrescriptionDraftStateListener;
 }
 
 const RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis, "dialysisDays">; label: string }[] = [
@@ -33,7 +35,7 @@ function StatusBadge({ status }: { status: AdminPrescription["status"] }) {
   return <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${map[status]}`}>{status}</span>;
 }
 
-export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, setPrescriptions, doctorName, addRxNotification }: DoctorPrescriptionProps) {
+export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, setPrescriptions, doctorName, addRxNotification, onDraftStateChange }: DoctorPrescriptionProps) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(prescriptions[0]?.id ?? null);
   const [showNew, setShowNew] = useState(false);
@@ -43,6 +45,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [savingRx, setSavingRx] = useState(false);
+  const draftGuard = usePrescriptionDraftGuard(editDraft, savingRx, onDraftStateChange);
 
   const filtered = prescriptions.filter(rx =>
     rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
@@ -50,13 +53,18 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
   );
 
   function startEdit(rx: AdminPrescription) {
+    if (!draftGuard.confirmDiscard()) return;
+    draftGuard.beginDraft(rx);
     setConflict(false); setSaveError(null);
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setEditingId(rx.id);
     setShowHistoryFor(null);
   }
 
-  function cancelEdit() { setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null); }
+  function cancelEdit() {
+    if (!draftGuard.confirmDiscard()) return;
+    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null);
+  }
 
   async function saveEdit() {
     if (!editDraft || savingRx || conflict) return;

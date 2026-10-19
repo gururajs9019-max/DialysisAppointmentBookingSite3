@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useStaffSync } from "./lib/useStaffSync";
+import { usePrescriptionLeaveGuard, usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "./lib/usePrescriptionLeaveGuard";
 import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData } from "./lib/staffApi";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
@@ -3000,7 +3001,7 @@ function blankPrescription(patient: Patient): AdminPrescription {
   };
 }
 
-function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName, onPatientUpdated, onSessionStatus, onOpenSchedule }: {
+function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, sessions, adminName, onPatientUpdated, onSessionStatus, onOpenSchedule, onDraftStateChange }: {
   patients: Patient[];
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
@@ -3009,6 +3010,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   onPatientUpdated: (patient: Patient) => void;
   onSessionStatus: (session: DialysisSession, status: "running" | "waiting" | "completed") => Promise<void>;
   onOpenSchedule: () => void;
+  onDraftStateChange: PrescriptionDraftStateListener;
 }) {
   const [filter, setFilter] = useState<TreatmentStatus | "All">("All");
   const [search, setSearch] = useState("");
@@ -3020,6 +3022,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [savingRx, setSavingRx] = useState(false);
+  const draftGuard = usePrescriptionDraftGuard(editDraft, savingRx, onDraftStateChange);
 
   const counts = (["Active", "Transplanted", "Expired", "Shifted", "Discontinued"] as TreatmentStatus[]).reduce(
     (acc, s) => ({ ...acc, [s]: patients.filter(p => p.treatmentStatus === s).length }), {} as Record<TreatmentStatus, number>
@@ -3035,20 +3038,28 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
   }, [patients, filter, search]);
 
   const startEdit = (rx: AdminPrescription) => {
+    if (!draftGuard.confirmDiscard()) return;
+    draftGuard.beginDraft(rx);
     setConflict(false); setSaveError(null); setCreatingPatientId(null);
     setEditingRxId(rx.id);
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setExpandedId(rx.patientId);
   };
   const startCreate = (patient: Patient) => {
+    if (!draftGuard.confirmDiscard()) return;
+    const next = blankPrescription(patient);
+    draftGuard.beginDraft(next);
     setConflict(false);
     setCreatingPatientId(patient.id);
     setEditingRxId(null);
-    setEditDraft(blankPrescription(patient));
+    setEditDraft(next);
     setExpandedId(patient.id);
     setSaveError(null);
   };
-  const cancelEdit = () => { setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null); setConflict(false); setSaveError(null); };
+  const cancelEdit = () => {
+    if (!draftGuard.confirmDiscard()) return;
+    setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null); setConflict(false); setSaveError(null);
+  };
 
   const saveEdit = async () => {
     if (!editDraft || savingRx || conflict) return;
@@ -5484,6 +5495,7 @@ export default function AdminApp({
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
+  const { onDraftStateChange, confirmLeave } = usePrescriptionLeaveGuard();
   const applyStaffData = useCallback((records: StaffData) => {
     setPatients(records.patients); setMachines(records.machines); setUnits(records.units);
     setSessions(records.sessions); setPrescriptions(records.prescriptions);
@@ -5521,7 +5533,7 @@ export default function AdminApp({
     }
   };
   const handleLogout = async () => {
-    if (window.confirm("Logout?")) {
+    if (confirmLeave("Logout?")) {
       await logoutStaff();
       setIsAuthenticated(false);
       setCurrentUser(null);
@@ -5553,6 +5565,7 @@ export default function AdminApp({
   }
 
   const navigate = (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => {
+    if (section !== activeSection && !confirmLeave()) return;
     setActiveSection(section);
     setActiveSectionLabel(label);
     setPrefillMachine(opts?.machine ?? null);
@@ -5616,7 +5629,7 @@ export default function AdminApp({
         try { await markNotificationRead(id, true); setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); }
         catch (error) { setStaffError(error instanceof Error ? error.message : "Notification could not be updated."); }
       }} />;
-      case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} onPatientUpdated={onPatientUpdated}
+      case "treatment-status":  return <TreatmentStatusSection patients={patients} prescriptions={prescriptions} setPrescriptions={setPrescriptions} sessions={sessions} adminName={currentUser?.name ?? "Administrator"} onPatientUpdated={onPatientUpdated} onDraftStateChange={onDraftStateChange}
         onOpenSchedule={()=>navigate("live-schedule","Live Schedule")}
         onSessionStatus={(session,status)=>applySessionUpdate(session.id,{status},{status:({running:"Running",waiting:"Waiting",completed:"Completed"} as const)[status]})} />;
       case "search-patients":
@@ -5719,7 +5732,7 @@ export default function AdminApp({
               <p className="text-white text-xs font-semibold truncate">{currentUser?.name}</p>
               <p className="text-slate-400 text-xs">@{currentUser?.username}</p>
             </div>
-            <button onClick={handleLogout}
+            <button onClick={handleLogout} aria-label="Logout"
               className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0">
               <LogOut className="w-4 h-4" />
             </button>

@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { useStaffSync } from "./lib/useStaffSync";
+import { usePrescriptionLeaveGuard } from "./lib/usePrescriptionLeaveGuard";
 import type { AdminPrescription, RxNotification, Patient, Machine, DialysisSession } from "./AdminApp";
 import { DoctorAuthPortal, DoctorData } from "./components/doctor/DoctorAuthPortal";
 import { DoctorHomePage } from "./components/doctor/DoctorHomePage";
@@ -57,6 +58,7 @@ export default function DoctorApp({
   const [analytics, setAnalytics] = useState<StaffAnalytics | null>(null);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
+  const { onDraftStateChange, confirmLeave } = usePrescriptionLeaveGuard();
   const [notifications, setNotifications] = useState<StaffNotification[]>([]);
   const applyStaffData = useCallback((data: StaffData) => {
     setPatients(data.patients); setMachines(data.machines); setSessions(data.sessions);
@@ -80,7 +82,7 @@ export default function DoctorApp({
   };
 
   const handleLogout = async () => {
-    if (window.confirm("Are you sure you want to logout?")) {
+    if (confirmLeave("Are you sure you want to logout?")) {
       await logoutStaff();
       setIsAuthenticated(false);
       setCurrentDoctor(null);
@@ -91,7 +93,9 @@ export default function DoctorApp({
   const handleNavigate = (newView: string) => {
     // Redirect removed pages to home
     const removed = ["approvals", "dashboard", "machines"];
-    setView((removed.includes(newView) ? "home" : newView) as DoctorView);
+    const destination = (removed.includes(newView) ? "home" : newView) as DoctorView;
+    if (destination !== view && !confirmLeave()) return;
+    setView(destination);
     setMobileMenuOpen(false);
   };
 
@@ -256,6 +260,7 @@ export default function DoctorApp({
 
         {view === "prescription" && (
           <DoctorPrescription
+            onDraftStateChange={onDraftStateChange}
             onNavigate={handleNavigate}
             prescriptions={prescriptions}
             setPrescriptions={setPrescriptions}
