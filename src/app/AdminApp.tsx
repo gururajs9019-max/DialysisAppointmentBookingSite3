@@ -2757,6 +2757,21 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
                   </div>
                 </div>
 
+                {selected.status === "Missed" && (
+                  <div className="border-t border-slate-100 pt-5">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Missed Session Reason</h4>
+                    {selected.missedReason ? (
+                      <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                        {selected.missedReason === "Other" && selected.missedReasonOther
+                          ? `Other: ${selected.missedReasonOther}`
+                          : selected.missedReason}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-slate-400 italic">No reason was recorded.</p>
+                    )}
+                  </div>
+                )}
+
                 {(selected.status === "Scheduled" || selected.status === "Waiting") && (
                   <div className="border-t border-slate-100 pt-5">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Record Session Outcome</h4>

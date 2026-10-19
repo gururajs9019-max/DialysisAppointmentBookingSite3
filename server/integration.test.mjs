@@ -102,7 +102,7 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
   }
 }
 
-async function runBrowserSessionOutcomeTest(patientName, machineCode, reason) {
+async function runBrowserSessionOutcomeTest(patientName, machineCode, machineName, reason) {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -127,6 +127,14 @@ async function runBrowserSessionOutcomeTest(patientName, machineCode, reason) {
     const machineCard = page.getByRole("heading", { name: machineCode, exact: true }).locator("xpath=../../..");
     await machineCard.getByText("Available", { exact: true }).waitFor();
     assert.equal(await machineCard.getByText("Available", { exact: true }).isVisible(), true, "machine card should show released availability without a refresh");
+
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByRole("heading", { name: "Live Dialysis Schedule" }).waitFor();
+    const revisitedSession = page.getByRole("button").filter({ hasText: patientName }).filter({ hasText: machineName });
+    await revisitedSession.waitFor();
+    await revisitedSession.click();
+    await page.getByRole("heading", { name: "Missed Session Reason" }).waitFor();
+    assert.equal(await page.getByText(reason, { exact: true }).isVisible(), true, "saved missed reason should remain visible after leaving and reopening the session");
   } finally {
     await browser.close();
   }
@@ -226,7 +234,7 @@ try {
   }), 201, "staff should be able to schedule a session for the live schedule");
   ids.sessions.push(outcomeSession.session.id);
   const browserMissedReason = `${run} missed session reason`;
-  await runBrowserSessionOutcomeTest(primary.patient.name, outcomeMachine.code, browserMissedReason);
+  await runBrowserSessionOutcomeTest(primary.patient.name, outcomeMachine.code, outcomeMachine.name, browserMissedReason);
   const browserOutcomeSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-updated sessions should be readable");
   const persistedBrowserOutcome = browserOutcomeSessions.sessions.find(item => item.id === outcomeSession.session.id);
   assert.equal(persistedBrowserOutcome?.status, "missed", "schedule action should persist the missed outcome");
