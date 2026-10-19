@@ -17,6 +17,7 @@ function hashPassword(password, salt = randomBytes(16).toString("hex")) {
 }
 
 const schemaSql = await readFile(new URL("./schema/001_dialysis_core.sql", import.meta.url), "utf8");
+const prescriptionHistorySeedSql = await readFile(new URL("./seeds/prescription-history.sql", import.meta.url), "utf8");
 const seedSql = `
 -- Synthetic demo seed. All writes use DO NOTHING, so a rerun never overwrites
 -- changes made through the application.
@@ -71,6 +72,7 @@ try {
     INSERT INTO prescriptions(id,patient_id,data,created_by)
     SELECT 'DEMO-RX001','P001','{"diagnosis":"CKD Stage 5","status":"Active","dialysisRx":{"weeklySessionsCount":"3 Sessions / Week","duration":"4 Hours"},"medications":[{"name":"Erythropoietin alfa","dose":"4000 IU","frequency":"Per session","route":"SC"}],"notes":"Synthetic demo prescription."}',u.id
     FROM portal_users u WHERE u.role IN ('doctor','admin') LIMIT 1 ON CONFLICT(id) DO NOTHING;
+    ${prescriptionHistorySeedSql}
     INSERT INTO clinical_notes(id,patient_id,body,author_id)
     SELECT 'DEMO-CN001','P001','Synthetic demo note: session plan reviewed.',u.id FROM portal_users u
     WHERE u.role IN ('doctor','admin') LIMIT 1 ON CONFLICT(id) DO NOTHING;

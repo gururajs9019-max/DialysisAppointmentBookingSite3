@@ -103,18 +103,19 @@ const asMachine = (m: Record<string, unknown>): Machine => ({
 const asSession = (s: Record<string, unknown>): DialysisSession => {
   const rawStatus = String(s.status || "scheduled").toLowerCase();
   const statusMap: Record<string, DialysisSession["status"]> = {
-    scheduled: "Scheduled", waiting: "Waiting", running: "Running", completed: "Completed",
+    scheduled: "Scheduled", waiting: "Waiting", called: "Called", running: "Running", completed: "Completed",
     missed: "Missed", cancelled: "Cancelled",
   };
   const attendanceMap: Record<string, DialysisSession["attendance"]> = {
-    scheduled: "Scheduled", waiting: "Scheduled", running: "Scheduled", completed: "Completed",
+    scheduled: "Scheduled", waiting: "Scheduled", called: "Scheduled", running: "Scheduled", completed: "Completed",
     missed: "Missed", cancelled: "Cancelled",
   };
   const attendance = (attendanceMap[rawStatus] || "Scheduled") as DialysisSession["attendance"];
   return { id: String(s.id), patientId: String(s.patientId || ""), patientName: String(s.patientName || ""),
     uhid: String(s.uhid || ""), date: String(s.date || ""), slot: String(s.slot || ""), machine: String(s.machine || ""),
     machineId: String(s.machineId || ""), unit: String(s.unitId || s.unit || ""), duration: String(s.duration || ""), doctor: String(s.doctor || ""),
-    attendance,
+    attendance, doctorId: typeof s.doctorId === "string" ? s.doctorId : undefined,
+    prescriptionId: typeof s.prescriptionId === "string" ? s.prescriptionId : undefined,
     notes: String(s.notes || ""), startTime: String(s.startTime || ""), endTime: String(s.endTime || ""),
     vitals: s.vitals as DialysisSession["vitals"], complications: s.complications as string[] | undefined,
     importantNote: typeof s.importantNote === "string" ? s.importantNote : undefined,
@@ -346,11 +347,17 @@ export const updateMachine = (id: string, changes: Pick<Machine, "status"> & Par
 export const createMachine = (machine: { unitId: string; code: string; name: string; category: string; status: string; notes?: string }) =>
   request<{ machine: Record<string, unknown> }>("/api/machines", { method: "POST", body: JSON.stringify(machine) }, "save");
 export type SessionUpdatePayload = {
-  status: "scheduled" | "waiting" | "running" | "completed" | "missed" | "cancelled";
+  status: "scheduled" | "waiting" | "called" | "running" | "completed" | "missed" | "cancelled";
   missedReason?: string;
   missedReasonOther?: string;
   [key: string]: unknown;
 };
+export type SchedulingOptions = {
+  doctors: { id: string; name: string }[];
+  prescriptions: { id: string; diagnosis: string | null; version: number }[];
+};
+export const fetchSchedulingOptions = (patientId?: string) =>
+  request<SchedulingOptions>(`/api/scheduling-options?patientId=${encodeURIComponent(patientId || "")}`);
 export const updateSession = async (id: string, payload: SessionUpdatePayload) => {
   const result = await request<{ session: Record<string, unknown>; machine?: Record<string, unknown> }>(
     `/api/sessions/${encodeURIComponent(id)}`,

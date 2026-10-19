@@ -5,6 +5,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { staffServices } from "./staff-services.mjs";
+import { validateSessionLinks } from "./session-clinical-links.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -16,7 +17,7 @@ const APPOINTMENT_FIELDS = ["firstName", "lastName", "dateOfBirth", "phone", "em
 const ROLES = ["doctor", "admin"];
 const LIFECYCLES = ["Active", "Transplanted", "Expired", "Shifted", "Discontinued", "Temporarily inactive", "Transferred", "Screening ended"];
 const MACHINE_CATEGORIES = ["Negative", "HCV", "HBsAg", "HIV", "RVD (HIV)"];
-const SESSION_STATUSES = ["scheduled", "waiting", "running", "completed", "missed", "cancelled"];
+const SESSION_STATUSES = ["scheduled", "waiting", "called", "running", "completed", "missed", "cancelled"];
 
 function sendJson(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers });
@@ -141,8 +142,10 @@ async function createSession(input, actor) {
     if (!machine) throw httpError(400, "Machine does not belong to the selected unit.");
     if (!["available", "scheduled", "in-use"].includes(machine.status)) throw httpError(409, "Machine is unavailable.");
     if (!compatibleMachine(patient.viral_category, machine.category)) throw httpError(409, "Machine is not compatible with the patient's viral category.");
-    const id = randomUUID(), status = input.status && SESSION_STATUSES.includes(input.status) ? input.status : "scheduled";
-    try { await client.query("INSERT INTO dialysis_sessions(id,patient_id,machine_id,unit_id,session_date,slot,status,data,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", [id, patientId, machineId, unitId, date, slot, status, { ...input, date, slot }, actor.id]); }
+    if (input.status && !SESSION_STATUSES.includes(input.status)) throw httpError(400, "Invalid session status.");
+    const links = await validateSessionLinks(client, input, patientId, { text, httpError });
+    const id = randomUUID(), status = input.status || "scheduled";
+    try { await client.query("INSERT INTO dialysis_sessions(id,patient_id,machine_id,unit_id,session_date,slot,status,data,created_by,doctor_id,prescription_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", [id, patientId, machineId, unitId, date, slot, status, { ...input, ...links, date, slot }, actor.id, links.doctorId, links.prescriptionId]); }
     catch (e) { if (e.code === "23505") throw httpError(409, "Patient or machine is already booked for this date and slot."); throw e; }
     await client.query("UPDATE dialysis_machines SET status='scheduled', updated_at=now() WHERE id=$1", [machineId]);
     await audit(client, actor, "session.create", "session", id, { patientId, machineId, date, slot });
@@ -155,7 +158,7 @@ function dateKey(value) {
     ? `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,"0")}-${String(value.getDate()).padStart(2,"0")}`
     : String(value).slice(0,10);
 }
-function sessionDto(r) { return { ...r.data, id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:dateKey(r.session_date), slot:r.slot, status:r.status, createdAt:r.created_at, updatedAt:r.updated_at }; }
+function sessionDto(r) { return { ...r.data, id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:dateKey(r.session_date), slot:r.slot, status:r.status, doctorId:r.doctor_id, prescriptionId:r.prescription_id, createdAt:r.created_at, updatedAt:r.updated_at }; }
 async function fetchMachineWithNextSession(client, machineId) {
   return (await client.query(`
     SELECT m.*,
@@ -168,7 +171,7 @@ async function fetchMachineWithNextSession(client, machineId) {
       FROM dialysis_sessions s
       JOIN patients p ON p.id = s.patient_id
       WHERE s.machine_id = m.id
-        AND s.status IN ('scheduled', 'waiting', 'running')
+        AND s.status IN ('scheduled', 'waiting', 'called', 'running')
         AND s.session_date >= CURRENT_DATE
       ORDER BY s.session_date, s.slot, s.created_at
       LIMIT 1
@@ -180,7 +183,7 @@ async function recalculateMachineAvailability(client, machineId) {
   const machine = (await client.query("SELECT id,status FROM dialysis_machines WHERE id=$1 FOR UPDATE", [machineId])).rows[0];
   if (!machine) throw httpError(404, "Machine was not found.");
   const active = (await client.query(
-    "SELECT 1 FROM dialysis_sessions WHERE machine_id=$1 AND status IN ('scheduled','waiting','running') AND session_date >= CURRENT_DATE LIMIT 1",
+    "SELECT 1 FROM dialysis_sessions WHERE machine_id=$1 AND status IN ('scheduled','waiting','called','running') AND session_date >= CURRENT_DATE LIMIT 1",
     [machineId],
   )).rowCount > 0;
   if (["available", "scheduled"].includes(machine.status)) {
@@ -257,12 +260,33 @@ async function api(req, res, url) {
     if (path === "/api/users" && req.method === "POST") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), role=text(x.role,"role",{required:true}); if(!ROLES.includes(role)) throw httpError(400,"Invalid staff role."); const password=text(x.password,"password",{required:true,max:512}); if(password.length<12) throw httpError(400,"Password must be at least 12 characters."); const id=randomUUID(); try { const r=await pool.query("INSERT INTO portal_users(id,username,email,name,role,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,username,email,name,role,created_at",[id,text(x.username,"username",{max:80})||null,text(x.email,"email",{required:true,max:320}),text(x.name,"name",{required:true}),role,hashPassword(password)]); await transaction(c=>audit(c,actor,"user.create","user",id,{role})); sendJson(res,201,{user:r.rows[0]}); } catch(e) { if(e.code==="23505") throw httpError(409,"Username or email already exists."); throw e; } return true; }
 
     if (path === "/api/patients" && req.method === "GET") { await requireStaff(req); const q=url.searchParams.get("q"); const r=await pool.query(`SELECT * FROM patients ${q ? "WHERE uhid ILIKE $1 OR data->>'name' ILIKE $1" : ""} ORDER BY created_at DESC`,q?[`%${q}%`]:[]); sendJson(res,200,{patients:r.rows.map(patientDto)}); return true; }
-    if (path === "/api/patients" && req.method === "POST") { const actor=await requireStaff(req,"admin"), values=validatePatient(await readJson(req)); const id=randomUUID(); try { const row=await pool.query("INSERT INTO patients(id,uhid,data,viral_category,lifecycle) VALUES($1,$2,$3,$4,$5) RETURNING *",[id,values.uhid,values,values.viralCategory||"Negative",values.treatmentStatus||"Active"]); await transaction(c=>audit(c,actor,"patient.create","patient",id)); sendJson(res,201,{patient:patientDto(row.rows[0])}); } catch(e) { if(e.code==="23505") throw httpError(409,"UHID already exists."); throw e; } return true; }
+    if (path === "/api/patients" && req.method === "POST") {
+      const actor=await requireStaff(req,"admin"), values=validatePatient(await readJson(req)), id=randomUUID();
+      try {
+        const patient=await transaction(async c=>{
+          const r=await c.query("INSERT INTO patients(id,uhid,data,viral_category,lifecycle) VALUES($1,$2,$3,$4,$5) RETURNING *",
+            [id,values.uhid,values,values.viralCategory||"Negative",values.treatmentStatus||"Active"]);
+          const saved=patientDto(r.rows[0]);
+          await audit(c,actor,"patient.create","patient",id,{after:saved});
+          return saved;
+        });
+        sendJson(res,201,{patient});
+      } catch(e) { if(e.code==="23505") throw httpError(409,"UHID already exists."); throw e; }
+      return true;
+    }
     if (parts[1]==="patients" && parts.length===3 && req.method==="GET") { await requireStaff(req); sendJson(res,200,{patient:patientDto(await fetchPatient(pool,decodeURIComponent(parts[2])))}); return true; }
     if (parts[1]==="patients" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]), values=validatePatient(await readJson(req),true); const row=await fetchPatient(pool,id); const lifecycle=values.treatmentStatus||row.lifecycle, data={...row.data,...values}; const r=await pool.query("UPDATE patients SET uhid=COALESCE($2,uhid),data=$3,viral_category=$4,lifecycle=$5,updated_at=now() WHERE id=$1 RETURNING *",[id,values.uhid||null,data,values.viralCategory||row.viral_category,lifecycle]); await transaction(c=>audit(c,actor,"patient.update","patient",id)); sendJson(res,200,{patient:patientDto(r.rows[0])}); return true; }
 
     if (path === "/api/units" && req.method==="GET") { await requireStaff(req); sendJson(res,200,{units:(await pool.query("SELECT id,name,active,created_at FROM dialysis_units ORDER BY name")).rows}); return true; }
-    if (path === "/api/units" && req.method==="POST") { const actor=await requireStaff(req,"admin"), input=object(await readJson(req)), id=randomUUID(), name=text(input.name,"name",{required:true}); const r=await pool.query("INSERT INTO dialysis_units(id,name) VALUES($1,$2) RETURNING id,name,active",[id,name]); await transaction(c=>audit(c,actor,"unit.create","unit",id)); sendJson(res,201,{unit:r.rows[0]}); return true; }
+    if (path === "/api/units" && req.method==="POST") {
+      const actor=await requireStaff(req,"admin"), input=object(await readJson(req)), id=randomUUID(), name=text(input.name,"name",{required:true});
+      const unit=await transaction(async c=>{
+        const r=await c.query("INSERT INTO dialysis_units(id,name) VALUES($1,$2) RETURNING id,name,active",[id,name]);
+        await audit(c,actor,"unit.create","unit",id,{after:r.rows[0]});
+        return r.rows[0];
+      });
+      sendJson(res,201,{unit}); return true;
+    }
     if (path === "/api/machines" && req.method==="GET") {
       await requireStaff(req);
       const r = await pool.query(`
@@ -276,7 +300,7 @@ async function api(req, res, url) {
           FROM dialysis_sessions s
           JOIN patients p ON p.id = s.patient_id
           WHERE s.machine_id = m.id
-            AND s.status IN ('scheduled', 'waiting', 'running')
+            AND s.status IN ('scheduled', 'waiting', 'called', 'running')
             AND s.session_date >= CURRENT_DATE
           ORDER BY s.session_date, s.slot, s.created_at
           LIMIT 1
@@ -286,7 +310,17 @@ async function api(req, res, url) {
       sendJson(res,200,{machines:r.rows});
       return true;
     }
-    if (path === "/api/machines" && req.method==="POST") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), id=randomUUID(), category=text(x.category,"category",{required:true}); if(!MACHINE_CATEGORIES.includes(category)) throw httpError(400,"Invalid machine category."); const r=await pool.query("INSERT INTO dialysis_machines(id,unit_id,code,name,category,status,notes) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",[id,text(x.unitId,"unitId",{required:true}),text(x.code,"machine code",{required:true,max:80}),text(x.name,"name",{required:true}),category,x.status||"available",text(x.notes,"notes")||""]); await transaction(c=>audit(c,actor,"machine.create","machine",id)); sendJson(res,201,{machine:r.rows[0]}); return true; }
+    if (path === "/api/machines" && req.method==="POST") {
+      const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), id=randomUUID(), category=text(x.category,"category",{required:true});
+      if(!MACHINE_CATEGORIES.includes(category)) throw httpError(400,"Invalid machine category.");
+      const machine=await transaction(async c=>{
+        const r=await c.query("INSERT INTO dialysis_machines(id,unit_id,code,name,category,status,notes) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+          [id,text(x.unitId,"unitId",{required:true}),text(x.code,"machine code",{required:true,max:80}),text(x.name,"name",{required:true}),category,x.status||"available",text(x.notes,"notes")||""]);
+        await audit(c,actor,"machine.create","machine",id,{after:r.rows[0]});
+        return r.rows[0];
+      });
+      sendJson(res,201,{machine}); return true;
+    }
     if (parts[1]==="machines" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), id=decodeURIComponent(parts[2]); const fields=["status","notes","name"], changes=Object.fromEntries(Object.entries(x).filter(([k,v])=>fields.includes(k)&&typeof v==="string")); if(!Object.keys(changes).length) throw httpError(400,"No supported machine changes."); if(changes.status && !["available","in-use","scheduled","maintenance","disabled"].includes(changes.status)) throw httpError(400,"Invalid machine status."); const r=await pool.query("UPDATE dialysis_machines SET name=COALESCE($2,name),status=COALESCE($3,status),notes=COALESCE($4,notes),updated_at=now() WHERE id=$1 RETURNING *",[id,changes.name||null,changes.status||null,changes.notes||null]); if(!r.rowCount) throw httpError(404,"Machine was not found."); await transaction(c=>audit(c,actor,"machine.update","machine",id)); sendJson(res,200,{machine:r.rows[0]}); return true; }
 
     if (path === "/api/sessions" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id ORDER BY session_date DESC,slot"); sendJson(res,200,{sessions:r.rows.map(sessionDto)}); return true; }
@@ -303,7 +337,7 @@ async function api(req, res, url) {
       const result = await transaction(async client => {
         const existing = (await client.query("SELECT * FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
         if (!existing) throw httpError(404, "Session was not found.");
-        if(["scheduled","waiting","running"].includes(x.status)) {
+        if(["scheduled","waiting","called","running"].includes(x.status)) {
           const patient=await fetchPatient(client,existing.patient_id);
           if(patient.lifecycle!=="Active") throw httpError(409,"Inactive patients cannot have active sessions.");
         }

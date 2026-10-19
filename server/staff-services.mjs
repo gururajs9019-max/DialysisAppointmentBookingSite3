@@ -16,11 +16,20 @@ export function staffServices(ctx) {
     role: u.role, status: u.status, ...u.profile, dateAdded: u.created_at, updatedAt: u.updated_at,
     hasHistoricalRecords: Boolean(u.has_history) });
   const historySql = `EXISTS(SELECT 1 FROM audit_logs a WHERE a.actor_id=u.id)
-    OR EXISTS(SELECT 1 FROM dialysis_sessions s WHERE s.created_by=u.id OR s.data->>'doctor'=u.name)
+    OR EXISTS(SELECT 1 FROM dialysis_sessions s WHERE s.created_by=u.id OR s.doctor_id=u.id OR s.data->>'doctor'=u.name)
     OR EXISTS(SELECT 1 FROM prescriptions p WHERE p.created_by=u.id)
     OR EXISTS(SELECT 1 FROM clinical_notes n WHERE n.author_id=u.id)`;
   return async (req, res, url) => {
     const path = url.pathname, parts = path.split("/").filter(Boolean);
+    if (path === "/api/scheduling-options" && req.method === "GET") {
+      await requireStaff(req);
+      const patientId = url.searchParams.get("patientId");
+      const [doctors, prescriptions] = await Promise.all([
+        pool.query("SELECT id,name FROM portal_users WHERE role='doctor' AND status='Active' ORDER BY name,id"),
+        pool.query("SELECT id,version,data->>'diagnosis' diagnosis FROM prescriptions WHERE patient_id=$1 AND status<>'Discontinued' ORDER BY updated_at DESC,id", [patientId]),
+      ]);
+      sendJson(res,200,{doctors:doctors.rows,prescriptions:prescriptions.rows}); return true;
+    }
     if (path === "/api/users" && req.method === "GET") {
       await requireStaff(req, "admin");
       const r = await pool.query(`SELECT u.*,(${historySql}) has_history FROM portal_users u ORDER BY name`);
@@ -84,7 +93,7 @@ export function staffServices(ctx) {
         if(lifecycle!=="Active") {
           const ended=await c.query(`UPDATE dialysis_sessions SET status='cancelled',
             data=data || '{"status":"cancelled","attendance":"Cancelled"}'::jsonb,updated_at=now()
-            WHERE patient_id=$1 AND session_date>=CURRENT_DATE AND status IN ('scheduled','waiting')
+            WHERE patient_id=$1 AND session_date>=CURRENT_DATE AND status IN ('scheduled','waiting','called')
             RETURNING id,machine_id`,[id]);
           for(const s of ended.rows) {
             await recalculateMachineAvailability(c,s.machine_id);

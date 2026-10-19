@@ -3,3 +3,4 @@
 - [Database calendar dates](database-calendar-dates.md) — Preserve YYYY-MM-DD scheduling dates when the PostgreSQL driver returns Date objects.
 - [Staff history loading](staff-history-loading.md) — Preserve history comparisons and load-error behavior when optimizing staff refreshes.
 - [Staff edit conflicts](staff-edit-conflicts.md) — Background refreshes must never silently rebase an open clinical draft.
+- [Historical clinical assignments](schedule-clinical-links.md) — Keep unassigned schedules valid; never infer past clinical links from names or current prescriptions.

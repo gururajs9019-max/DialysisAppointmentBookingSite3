@@ -70,7 +70,26 @@ try {
     indexes.rows.map(row => row.indexname),
     ["active_machine_slot", "active_patient_slot"],
   );
-  console.log("schema compatibility tests passed");
+  const historySeed = await readFile(new URL("./seeds/prescription-history.sql", import.meta.url), "utf8");
+  await client.query(`
+    INSERT INTO portal_users(id,email,name,role,password_hash) VALUES('seed-author','seed@example.test','Synthetic author','doctor','not-a-login');
+    INSERT INTO patients(id,uhid,data,viral_category) VALUES('seed-patient','SYNTHETIC-SEED','{}','Negative');
+    INSERT INTO prescriptions(id,patient_id,data,created_by)
+      VALUES('DEMO-RX001','seed-patient','{"diagnosis":"Synthetic original"}','seed-author');
+  `);
+  await client.query(historySeed);
+  await client.query(historySeed);
+  const original = (await client.query("SELECT version,snapshot,changed_by FROM prescription_versions")).rows;
+  assert.deepEqual(original, [{ version:1, snapshot:{ diagnosis:"Synthetic original" }, changed_by:"seed-author" }]);
+  await client.query(`UPDATE prescriptions SET version=2,data='{"diagnosis":"Synthetic edited"}' WHERE id='DEMO-RX001'`);
+  await client.query(historySeed);
+  assert.deepEqual((await client.query("SELECT version,snapshot,changed_by FROM prescription_versions")).rows, original,
+    "reseeding never overwrites history with the edited prescription");
+  await client.query("DELETE FROM prescription_versions WHERE prescription_id='DEMO-RX001'");
+  await client.query(historySeed);
+  assert.equal((await client.query("SELECT count(*)::int count FROM prescription_versions")).rows[0].count, 0,
+    "a missing historical snapshot cannot be fabricated from an edited demo");
+  console.log("schema compatibility and idempotent prescription seed tests passed");
 } finally {
   try {
     await client.query("SET search_path TO public");

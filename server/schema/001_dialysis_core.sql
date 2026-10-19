@@ -133,3 +133,19 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS record_id text;
 ALTER TABLE patients DROP CONSTRAINT IF EXISTS patients_lifecycle_check;
 ALTER TABLE patients ADD CONSTRAINT patients_lifecycle_check CHECK
   (lifecycle IN ('Active','Transplanted','Expired','Shifted','Discontinued','Temporarily inactive','Transferred','Screening ended'));
+
+-- Unassigned historical sessions remain valid; explicit clinical links retain
+-- their records and cannot point to a different patient's prescription.
+ALTER TABLE dialysis_sessions DROP CONSTRAINT IF EXISTS dialysis_sessions_status_check;
+ALTER TABLE dialysis_sessions ADD CONSTRAINT dialysis_sessions_status_check CHECK
+  (status IN ('scheduled','waiting','called','running','completed','missed','cancelled'));
+ALTER TABLE dialysis_sessions ADD COLUMN IF NOT EXISTS doctor_id text REFERENCES portal_users(id);
+ALTER TABLE dialysis_sessions ADD COLUMN IF NOT EXISTS prescription_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS prescriptions_id_patient ON prescriptions(id,patient_id);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='dialysis_sessions'::regclass
+    AND conname='session_patient_prescription') THEN
+    ALTER TABLE dialysis_sessions ADD CONSTRAINT session_patient_prescription
+      FOREIGN KEY (prescription_id,patient_id) REFERENCES prescriptions(id,patient_id);
+  END IF;
+END $$;

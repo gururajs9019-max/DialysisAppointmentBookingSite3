@@ -5,6 +5,7 @@ import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccou
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
+import { ScheduleClinicalLinks, type ScheduleLinks } from "./components/admin/ScheduleClinicalLinks";
 import { logoutStaff } from "./lib/appointmentApi";
 import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
@@ -46,7 +47,7 @@ type ViralStatusValue = "Positive" | "Negative" | "Unknown" | "Awaiting Report";
 const TREATMENT_STATUSES = ["Active", "Transplanted", "Expired", "Shifted", "Discontinued", "Temporarily inactive", "Transferred", "Screening ended"] as const;
 type TreatmentStatus = typeof TREATMENT_STATUSES[number];
 type AttendanceStatus = "Scheduled" | "Completed" | "Missed" | "Cancelled";
-type SessionStatus = "Scheduled" | "Running" | "Waiting" | "Completed" | "Missed" | "Cancelled";
+type SessionStatus = "Scheduled" | "Running" | "Waiting" | "Called" | "Completed" | "Missed" | "Cancelled";
 type AssignStep = 1 | 2 | 3 | 4 | "success";
 
 interface ViralProfile {
@@ -101,6 +102,7 @@ export interface DialysisSession {
   id: string; patientId: string; patientName: string; uhid: string;
   date: string; slot: string; machine: string; machineId: string; unit: string;
   duration: string; doctor: string; attendance: AttendanceStatus;
+  doctorId?: string; prescriptionId?: string;
   notes: string; startTime: string; endTime: string;
   status: SessionStatus; missedReason?: string; missedReasonOther?: string;
   slotType?: "normal" | "emergency";
@@ -111,6 +113,8 @@ export interface DialysisSession {
 }
 
 interface AssignmentDraft {
+  doctorId?: string;
+  prescriptionId?: string;
   patient: Patient | null;
   unit: DialysisUnit | null;
   machine: Machine | null;
@@ -626,6 +630,10 @@ function SessionStatusPill({ status }: { status: SessionStatus }) {
   const map = {
     Running:   "bg-blue-100 text-blue-700",
     Waiting:   "bg-amber-100 text-amber-700",
+    Called:    "bg-violet-100 text-violet-700",
+    Scheduled: "bg-violet-100 text-violet-700",
+    Missed:    "bg-red-100 text-red-700",
+    Cancelled: "bg-slate-100 text-slate-600",
     Completed: "bg-slate-100 text-slate-600",
   };
   return <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${map[status]}`}>{status}</span>;
@@ -1064,14 +1072,8 @@ function Step4Schedule({ draft, onChange, validation, units }: {
             onChange={e => onChange("date", e.target.value)}
             min={new Date().toISOString().split("T")[0]} />
         </div>
-        <div>
-          <label className={labelCls}>Treating Doctor</label>
-          <select className={inputCls} value={draft.doctor}
-            onChange={e => onChange("doctor", e.target.value)}>
-            <option value="">Not assigned</option>
-            {DOCTORS.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </div>
+        <ScheduleClinicalLinks key={draft.patient?.id} patientId={draft.patient?.id} value={draft}
+          onChange={links => { for (const key of ["doctor", "doctorId", "prescriptionId"] as const) onChange(key, links[key]); }} />
       </div>
 
       <div>
@@ -1236,6 +1238,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       unit: draft.unit!.id,
       duration: draft.duration,
       doctor: draft.doctor || "Not assigned",
+      doctorId: draft.doctorId, prescriptionId: draft.prescriptionId,
       attendance: "Completed",
       notes: draft.notes,
       startTime: draft.startTime,
@@ -1320,7 +1323,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               Select Patient
             </h3>
             <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => setDraft(d => ({ ...d, patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
+              onSelect={p => setDraft(d => ({ ...d, prescriptionId: p.id === d.patient?.id ? d.prescriptionId : "", patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
           </>
         )}
         {step === 2 && draft.patient && (
@@ -1351,7 +1354,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               Select Patient
             </h3>
             <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => setDraft(d => ({ ...d, patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
+              onSelect={p => setDraft(d => ({ ...d, prescriptionId: p.id === d.patient?.id ? d.prescriptionId : "", patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
           </>
         )}
         {step === 4 && (
@@ -1410,7 +1413,7 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [date, setDate] = useState("");
   const [selectedSlot, setSelectedSlot] = useState("");
-  const [doctor, setDoctor] = useState("");
+  const [clinicalLinks, setClinicalLinks] = useState<ScheduleLinks>({ doctor: "", doctorId: "", prescriptionId: "" });
   const [notes, setNotes] = useState("");
   const [confirmed, setConfirmed] = useState(false);
 
@@ -1424,7 +1427,7 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
   const draft: AssignmentDraft = {
     patient: selectedPatient, unit: null, machine,
     slot: selectedSlot, startTime: slot?.startFmt ?? "", endTime: slot?.endFmt ?? "",
-    duration: "4 hours", doctor, notes, date,
+    duration: "4 hours", doctor: clinicalLinks.doctor, notes, date,
   };
   const validation = selectedPatient && date && selectedSlot
     ? validateAssignment(draft, sessions)
@@ -1438,7 +1441,8 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
       patientName: selectedPatient!.name, uhid: selectedPatient!.uhid,
       date, slot: selectedSlot, machine: machine.number, machineId: machine.id,
       unit: machine.unit, duration: "4 hours",
-      doctor: doctor || "Not assigned", attendance: "Completed", notes,
+      doctor: clinicalLinks.doctor || "Not assigned", doctorId: clinicalLinks.doctorId,
+      prescriptionId: clinicalLinks.prescriptionId, attendance: "Completed", notes,
       startTime: slot?.startFmt ?? "—", endTime: slot?.endFmt ?? "—", status: "Waiting",
     };
     try { await onAssigned(newSession, machine.id); setConfirmed(true); }
@@ -1485,7 +1489,7 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1.5 border border-slate-100 rounded-xl p-2">
                   {filtered.slice(0, 10).map(p => (
-                    <button key={p.id} onClick={() => setSelectedPatient(p)}
+                    <button key={p.id} onClick={() => { setSelectedPatient(p); setClinicalLinks(d => ({ ...d, prescriptionId: p.id === selectedPatient?.id ? d.prescriptionId : "" })); }}
                       className={`w-full text-left px-3 py-2.5 rounded-lg transition-all text-sm ${selectedPatient?.id === p.id ? "bg-violet-50 border-2 border-violet-400" : "hover:bg-slate-50 border-2 border-transparent"}`}>
                       <div className="flex items-center justify-between">
                         <div>
@@ -1524,11 +1528,8 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
                     min={new Date().toISOString().split("T")[0]} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Doctor</label>
-                  <select className={inputCls} value={doctor} onChange={e => setDoctor(e.target.value)}>
-                    <option value="">Not assigned</option>
-                    {DOCTORS.map(d => <option key={d} value={d}>{d}</option>)}
-                  </select>
+                  <ScheduleClinicalLinks key={selectedPatient?.id} patientId={selectedPatient?.id}
+                    value={clinicalLinks} onChange={setClinicalLinks} />
                 </div>
               </div>
 
@@ -2577,6 +2578,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
   const [draftComplications, setDraftComplications] = useState<string[]>([]);
   const [draftNote, setDraftNote] = useState("");
   const [missedReasonDraft, setMissedReasonDraft] = useState("");
+  const [statusSaving, setStatusSaving] = useState(false);
   const [savingOutcome, setSavingOutcome] = useState<"Missed" | "Cancelled" | null>(null);
   const [complicOpen, setComplicOpen] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2591,6 +2593,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
   const scheduled = dateSessions.filter(s => s.status === "Scheduled");
   const running   = dateSessions.filter(s => s.status === "Running");
   const waiting   = dateSessions.filter(s => s.status === "Waiting");
+  const called    = dateSessions.filter(s => s.status === "Called");
   const completed = dateSessions.filter(s => s.status === "Completed");
   const missed    = dateSessions.filter(s => s.status === "Missed");
   const cancelled = dateSessions.filter(s => s.status === "Cancelled");
@@ -2714,6 +2717,12 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
               <div className="space-y-2">{waiting.map(renderCard)}</div>
             </div>
           )}
+          {called.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-violet-600 uppercase tracking-wider mb-2">Called ({called.length})</p>
+              <div className="space-y-2">{called.map(renderCard)}</div>
+            </div>
+          )}
           {completed.length > 0 && (
             <div>
               <p className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2">Completed ({completed.length})</p>
@@ -2754,6 +2763,17 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
                 </div>
               </div>
               <div className="p-6 space-y-6">
+                {["Scheduled", "Waiting", "Called"].includes(selected.status) && (
+                  <button type="button" disabled={statusSaving} onClick={async () => {
+                    try {
+                      setSessionError(null); setStatusSaving(true);
+                      await onUpdateSession(selected.id, { status: selected.status === "Called" ? "Running" : "Called" });
+                    } catch (error) { setSessionError(error instanceof Error ? error.message : "Session status could not be saved."); }
+                    finally { setStatusSaving(false); }
+                  }} className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-semibold">
+                    {selected.status === "Called" ? "Start Treatment" : "Call Patient"}
+                  </button>
+                )}
                 {/* Patient info */}
                 <div>
                   <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Patient Information</h4>
@@ -2789,7 +2809,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
                   </div>
                 )}
 
-                {(selected.status === "Scheduled" || selected.status === "Waiting") && (
+                {(["Scheduled", "Waiting", "Called"].includes(selected.status)) && (
                   <div className="border-t border-slate-100 pt-5">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Record Session Outcome</h4>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="missed-session-reason">
@@ -3654,6 +3674,9 @@ function MissedSlotsSection({ sessions, patients, machines, onFillSlot, onUpdate
   const [fillModal, setFillModal] = useState<DialysisSession | null>(null);
   const [fillType, setFillType] = useState<"waiting" | "emergency" | "manual" | "">("");
   const [selectedFillPatient, setSelectedFillPatient] = useState<Patient | null>(null);
+  const [fillLinks, setFillLinks] = useState<ScheduleLinks>({ doctor: "", doctorId: "", prescriptionId: "" });
+  const [fillError, setFillError] = useState("");
+  const [fillSaving, setFillSaving] = useState(false);
   const [missedReasons, setMissedReasons] = useState<Record<string, string>>(
     Object.fromEntries(missedSessions.map(s => [s.id, s.missedReason ?? ""]))
   );
@@ -3679,20 +3702,26 @@ function MissedSlotsSection({ sessions, patients, machines, onFillSlot, onUpdate
     : fillType === "emergency" ? emergencyPatients
     : availablePatients;
 
-  const handleFill = () => {
+  const handleFill = async () => {
     if (!fillModal || !selectedFillPatient) return;
     const newSession: DialysisSession = {
       id: `SF${Date.now()}`,
       patientId: selectedFillPatient.id, patientName: selectedFillPatient.name,
       uhid: selectedFillPatient.uhid, date: fillModal.date, slot: fillModal.slot,
       machine: fillModal.machine, machineId: fillModal.machineId, unit: fillModal.unit,
-      duration: fillModal.duration, doctor: fillModal.doctor, attendance: "Completed",
+      duration: fillModal.duration, doctor: fillLinks.doctor || "Not assigned",
+      doctorId: fillLinks.doctorId, prescriptionId: fillLinks.prescriptionId, attendance: "Completed",
       notes: `Slot filled after missed session (${missedReasons[fillModal.id] || "reason not recorded"})`,
       startTime: fillModal.startTime, endTime: fillModal.endTime, status: "Waiting",
     };
-    onFillSlot(fillModal, newSession);
-    setFillSuccess(fillModal.id);
-    setFillModal(null); setFillType(""); setSelectedFillPatient(null);
+    try {
+      setFillSaving(true); setFillError("");
+      await onFillSlot(fillModal, newSession);
+      setFillSuccess(fillModal.id);
+      setFillModal(null); setFillType(""); setSelectedFillPatient(null);
+      setFillLinks({ doctor: "", doctorId: "", prescriptionId: "" });
+    } catch (error) { setFillError(error instanceof Error ? error.message : "Replacement session could not be saved."); }
+    finally { setFillSaving(false); }
   };
 
   const missedReasonOptions = ["Went to another dialysis centre", "Expired", "Hospitalized", "Personal reason", "No transport", "Family emergency", "Other"];
@@ -3863,7 +3892,7 @@ function MissedSlotsSection({ sessions, patients, machines, onFillSlot, onUpdate
                   {candidateList.length === 0 ? (
                     <p className="text-xs text-slate-400 text-center py-6">No patients in this category.</p>
                   ) : candidateList.map(p => (
-                    <button key={p.id} onClick={() => setSelectedFillPatient(p)}
+                    <button key={p.id} onClick={() => { setSelectedFillPatient(p); setFillLinks(d => ({ ...d, prescriptionId: "" })); }}
                       className={`w-full text-left px-3 py-2.5 rounded-lg transition-all border-2 ${selectedFillPatient?.id === p.id ? "border-violet-400 bg-violet-50" : "border-transparent hover:bg-slate-50"}`}>
                       <div className="flex items-center justify-between">
                         <div>
@@ -3883,10 +3912,15 @@ function MissedSlotsSection({ sessions, patients, machines, onFillSlot, onUpdate
                 </div>
               )}
             </div>
+            <div className="px-6 pb-4">
+              <ScheduleClinicalLinks key={selectedFillPatient?.id} patientId={selectedFillPatient?.id}
+                value={fillLinks} onChange={setFillLinks} />
+              {fillError && <p role="alert" className="text-sm text-red-700 mt-2">{fillError}</p>}
+            </div>
             <div className="p-6 pt-0 flex gap-3 shrink-0">
-              <button onClick={() => { setFillModal(null); setFillType(""); setSelectedFillPatient(null); }}
+              <button disabled={fillSaving} onClick={() => { setFillModal(null); setFillType(""); setSelectedFillPatient(null); setFillError(""); setFillLinks({ doctor: "", doctorId: "", prescriptionId: "" }); }}
                 className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
-              <button onClick={handleFill} disabled={!selectedFillPatient}
+              <button onClick={handleFill} disabled={!selectedFillPatient || fillSaving}
                 className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed">
                 Confirm Replacement
               </button>
@@ -5511,7 +5545,7 @@ export default function AdminApp({
     const created = await createSession({
       patientId: session.patientId, machineId: session.machineId, unitId: session.unit,
       date: session.date, slot: session.slot, status: "waiting", duration: session.duration,
-      doctor: session.doctor, notes: session.notes,
+      doctor: session.doctor, doctorId: session.doctorId, prescriptionId: session.prescriptionId, notes: session.notes,
       startTime: session.startTime, endTime: session.endTime, slotType: session.slotType,
       emergencyTime: session.emergencyTime,
     });
@@ -5603,7 +5637,7 @@ export default function AdminApp({
             onUpdateSession={async (id, updates) => {
               const currentStatus = updates.status ?? sessions.find(s => s.id === id)?.status ?? "Scheduled";
               const statusMap: Record<SessionStatus, SessionUpdatePayload["status"]> = {
-                Scheduled: "scheduled", Waiting: "waiting", Running: "running",
+                Scheduled: "scheduled", Waiting: "waiting", Called: "called", Running: "running",
                 Completed: "completed", Missed: "missed", Cancelled: "cancelled",
               };
               const next = statusMap[currentStatus];
@@ -5643,8 +5677,7 @@ export default function AdminApp({
         return (
           <MissedSlotsSection sessions={sessions} patients={patients} machines={machines}
             onFillSlot={async (_missed, replacement) => {
-              try { await handleAssigned(replacement, replacement.machineId); }
-              catch (error) { setStaffError(error instanceof Error ? error.message : "Replacement session could not be saved."); }
+              await handleAssigned(replacement, replacement.machineId);
             }}
             onUpdateMissedReason={async (id, reason, otherText) => {
               try {
