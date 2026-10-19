@@ -143,6 +143,13 @@ ALTER TABLE dialysis_sessions ADD COLUMN IF NOT EXISTS doctor_id text REFERENCES
 ALTER TABLE dialysis_sessions ADD COLUMN IF NOT EXISTS prescription_id text;
 CREATE UNIQUE INDEX IF NOT EXISTS prescriptions_id_patient ON prescriptions(id,patient_id);
 DO $$ BEGIN
+  -- Publish must carry the referenced key as a constraint, not just a
+  -- standalone index. Reuse the existing index so linked history stays intact.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='prescriptions'::regclass
+    AND conname='prescriptions_id_patient') THEN
+    ALTER TABLE prescriptions ADD CONSTRAINT prescriptions_id_patient
+      UNIQUE USING INDEX prescriptions_id_patient;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='dialysis_sessions'::regclass
     AND conname='session_patient_prescription') THEN
     ALTER TABLE dialysis_sessions ADD CONSTRAINT session_patient_prescription

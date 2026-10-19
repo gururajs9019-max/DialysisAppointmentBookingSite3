@@ -50,9 +50,27 @@ try {
     );
   `);
 
-  // Applying twice proves both legacy compatibility and idempotence.
+  // Reproduce the earlier development schema: a standalone unique index
+  // already supports the FK, but Publish did not carry that index to prod.
+  const attachUnique = "ALTER TABLE prescriptions ADD CONSTRAINT prescriptions_id_patient\n      UNIQUE USING INDEX prescriptions_id_patient;";
+  assert.ok(schemaSql.includes(attachUnique));
+  await client.query(schemaSql.replace(attachUnique, "NULL;"));
+  const originalIndex = (await client.query(`SELECT indexrelid FROM pg_index
+    WHERE indexrelid='prescriptions_id_patient'::regclass`)).rows[0].indexrelid;
+  const originalForeignKey = (await client.query(`SELECT oid FROM pg_constraint
+    WHERE conrelid='dialysis_sessions'::regclass AND conname='session_patient_prescription'`)).rows[0].oid;
+  // Applying twice upgrades that schema without replacing the index or FK.
   await client.query(schemaSql);
   await client.query(schemaSql);
+  const uniqueKey = (await client.query(`SELECT contype,convalidated,conindid,pg_get_constraintdef(oid) definition
+    FROM pg_constraint WHERE conrelid='prescriptions'::regclass AND conname='prescriptions_id_patient'`)).rows[0];
+  assert.equal(uniqueKey.contype, "u");
+  assert.equal(uniqueKey.convalidated, true);
+  assert.equal(uniqueKey.conindid, originalIndex, "upgrading preserves the existing unique index");
+  assert.equal(uniqueKey.definition, "UNIQUE (id, patient_id)");
+  assert.equal((await client.query(`SELECT oid FROM pg_constraint
+    WHERE conrelid='dialysis_sessions'::regclass AND conname='session_patient_prescription'`)).rows[0].oid,
+  originalForeignKey, "upgrading preserves the existing patient/prescription foreign key");
 
   const tables = await client.query(
     "SELECT tablename FROM pg_tables WHERE schemaname=$1 ORDER BY tablename",
