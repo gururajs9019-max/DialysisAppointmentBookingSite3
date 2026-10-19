@@ -29,6 +29,15 @@ function text(value, field, { required = false, max = 2000 } = {}) {
   if (typeof value !== "string" || (required && !value.trim()) || value.length > max) throw httpError(400, `Invalid ${field}.`);
   return value.trim();
 }
+function dateOnly(value, field) {
+  const result = text(value, field, { max: 10 });
+  if (!result) return undefined;
+  const parsed = new Date(`${result}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== result) {
+    throw httpError(400, `Invalid ${field}.`);
+  }
+  return result;
+}
 function object(value, field = "payload") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw httpError(400, `${field} must be an object.`);
   return value;
@@ -360,13 +369,100 @@ async function api(req, res, url) {
     if (path === "/api/missed-slots" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT * FROM dialysis_sessions WHERE status='missed' ORDER BY session_date DESC"); sendJson(res,200,{missedSlots:r.rows}); return true; }
 
     if (path === "/api/prescriptions" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT p.*,pt.uhid,pt.data patient_data,creator.name created_by_name,creator.role created_by_role,editor.name updated_by_name,editor.role updated_by_role FROM prescriptions p JOIN patients pt ON pt.id=p.patient_id LEFT JOIN portal_users creator ON creator.id=p.created_by LEFT JOIN LATERAL (SELECT changed_by FROM prescription_versions WHERE prescription_id=p.id ORDER BY version DESC LIMIT 1) latest_version ON true LEFT JOIN portal_users editor ON editor.id=latest_version.changed_by ORDER BY p.updated_at DESC"); sendJson(res,200,{prescriptions:r.rows.map(x=>({...x.data,id:x.id,patientId:x.patient_id,patientName:x.patient_data.name,patientUhid:x.uhid,version:x.version,status:x.status,createdAt:x.created_at,updatedAt:x.updated_at,createdBy:x.created_by_name||"Staff",createdByRole:x.created_by_role||"Doctor",updatedBy:x.updated_by_name||x.created_by_name||"Staff",updatedByRole:x.updated_by_role||x.created_by_role||"Doctor"}))}); return true; }
-    if (path === "/api/prescriptions" && req.method==="POST") { const actor=await requireStaff(req), x=object(await readJson(req)), patient=await fetchPatient(pool,text(x.patientId,"patientId",{required:true})); if(patient.lifecycle!=="Active") throw httpError(409,"Cannot prescribe for an inactive patient."); const id=randomUUID(); const created=await transaction(async c=>{ const r=await c.query("INSERT INTO prescriptions(id,patient_id,data,created_by) VALUES($1,$2,$3,$4) RETURNING *",[id,patient.id,x,actor.id]); await c.query("INSERT INTO prescription_versions(id,prescription_id,version,snapshot,changed_by) VALUES($1,$2,1,$3,$4)",[randomUUID(),id,x,actor.id]); await audit(c,actor,"prescription.create","prescription",id,{version:1}); await notifyRole(c,actor,actor.role==="doctor"?"admin":"doctor","info","Prescription created",`${patient.data.name} (${patient.uhid}) prescription v1 was created.`); return r.rows[0]; }); sendJson(res,201,{prescription:created}); return true; }
+    if (path === "/api/prescriptions" && req.method==="POST") {
+      const actor = await requireStaff(req);
+      const input = object(await readJson(req));
+      const patient = await fetchPatient(pool, text(input.patientId, "patientId", { required: true }));
+      if (patient.lifecycle !== "Active") throw httpError(409, "Cannot prescribe for an inactive patient.");
+
+      const requestId = text(input.requestId, "requestId", { max: 200 }) || randomUUID();
+      if (!/^[A-Za-z0-9_-]{8,200}$/.test(requestId)) throw httpError(400, "Invalid requestId.");
+      const medications = [];
+      if (input.medications !== undefined) {
+        if (!Array.isArray(input.medications) || input.medications.length > 100) {
+          throw httpError(400, "medications must be a list of at most 100 entries.");
+        }
+        for (const value of input.medications) {
+          const medication = object(value, "medication");
+          const clean = {
+            name: text(medication.name, "medicine name", { max: 300 }) || "",
+            strength: text(medication.strength, "medicine strength", { max: 200 }) || "",
+            dose: text(medication.dose, "medicine dose", { max: 200 }) || "",
+            route: text(medication.route, "medicine route", { max: 100 }) || "",
+            frequency: text(medication.frequency, "medicine frequency", { max: 200 }) || "",
+            duration: text(medication.duration, "medicine duration", { max: 200 }) || "",
+            quantity: text(medication.quantity, "medicine quantity", { max: 100 }) || "",
+            instructions: text(medication.instructions, "medicine instructions", { max: 2000 }) || "",
+          };
+          if (!Object.values(clean).some(Boolean)) continue;
+          if (!clean.name) throw httpError(400, "Each medication entry requires a medicine name.");
+          medications.push(clean);
+        }
+      }
+
+      const prescriptionData = {
+        patientId: patient.id,
+        prescriptionDate: dateOnly(input.prescriptionDate, "prescriptionDate") || "",
+        diagnosis: text(input.diagnosis, "diagnosis", { max: 2000 }) || "",
+        symptoms: text(input.symptoms, "symptoms", { max: 5000 }) || "",
+        investigationFindings: text(input.investigationFindings, "investigationFindings", { max: 5000 }) || "",
+        advice: text(input.advice, "advice", { max: 5000 }) || "",
+        dialysisRx: input.dialysisRx === undefined ? {} : object(input.dialysisRx, "dialysisRx"),
+        medications,
+        dietaryAdvice: text(input.dietaryAdvice, "dietaryAdvice", { max: 5000 }) || "",
+        followUpDate: dateOnly(input.followUpDate, "followUpDate") || "",
+        notes: text(input.notes, "notes", { max: 10000 }) || "",
+        status: "Active",
+      };
+
+      const result = await transaction(async client => {
+        const inserted = await client.query(
+          `INSERT INTO prescriptions(id,patient_id,data,created_by) VALUES($1,$2,$3,$4)
+           ON CONFLICT(id) DO NOTHING RETURNING *`,
+          [requestId, patient.id, prescriptionData, actor.id],
+        );
+        if (!inserted.rowCount) {
+          const existing = (await client.query(
+            "SELECT * FROM prescriptions WHERE id=$1 FOR UPDATE",
+            [requestId],
+          )).rows[0];
+          const sameRequest = existing
+            && existing.patient_id === patient.id
+            && existing.created_by === actor.id
+            && (await client.query(
+              "SELECT $1::jsonb = $2::jsonb AS same",
+              [existing.data, JSON.stringify(prescriptionData)],
+            )).rows[0].same;
+          if (!sameRequest) {
+            const error = httpError(409, "This save request was already used for a different prescription. Review the existing prescription before trying again.");
+            error.code = "PRESCRIPTION_CREATE_CONFLICT";
+            throw error;
+          }
+          return { prescription: existing, created: false };
+        }
+
+        const created = inserted.rows[0];
+        await client.query(
+          "INSERT INTO prescription_versions(id,prescription_id,version,snapshot,changed_by) VALUES($1,$2,1,$3,$4)",
+          [randomUUID(), requestId, prescriptionData, actor.id],
+        );
+        await audit(client, actor, "prescription.create", "prescription", requestId, { version: 1 });
+        await notifyRole(
+          client, actor, actor.role === "doctor" ? "admin" : "doctor", "info", "Prescription created",
+          `${patient.data.name} (${patient.uhid}) prescription v1 was created.`,
+        );
+        return { prescription: created, created: true };
+      });
+      sendJson(res, result.created ? 201 : 200, { prescription: result.prescription });
+      return true;
+    }
     if (parts[1]==="prescriptions" && parts.length===3 && req.method==="PATCH") {
       const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), payload=object(await readJson(req));
       const { baseVersion, ...x } = payload;
       if (!Number.isSafeInteger(baseVersion) || baseVersion < 1) throw httpError(400,"A positive integer baseVersion is required.");
       // Only clinical fields belong in immutable snapshots, never version metadata.
-      const changes = Object.fromEntries(["diagnosis","dialysisRx","medications","notes","status"]
+      const changes = Object.fromEntries(["diagnosis","dialysisRx","medications","notes","status",
+        "prescriptionDate","symptoms","investigationFindings","advice","dietaryAdvice","followUpDate"]
         .filter(key => Object.hasOwn(x,key)).map(key => [key,x[key]]));
       const updated=await transaction(async c=>{
         const old=(await c.query("SELECT * FROM prescriptions WHERE id=$1 FOR UPDATE",[id])).rows[0];

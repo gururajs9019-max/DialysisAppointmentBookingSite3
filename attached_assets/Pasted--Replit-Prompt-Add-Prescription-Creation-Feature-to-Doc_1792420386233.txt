@@ -1,0 +1,220 @@
+# Replit Prompt: Add Prescription Creation Feature to Doctor Portal
+
+Update the existing **Dialysis Slot Manager** application to allow doctors to **create new prescriptions for registered patients**, in addition to the existing functionality that allows doctors to update previously created prescriptions.
+
+Currently, the Doctor Portal only provides an option to update an existing prescription. I want doctors to be able to create a prescription for a patient who does not already have one.
+
+**Important:** This is an existing application. Inspect the current codebase, database schema, authentication system, and prescription-related functionality before making changes. Extend the existing implementation instead of rebuilding it.
+
+## 1. Add a "Create Prescription" Feature
+
+In the Doctor Portal, add a clearly visible **"+ Create Prescription"** button.
+
+Place it in the existing prescription management section or on the patient details page, wherever it fits best with the current application design.
+
+When the doctor clicks this button, open a prescription creation form.
+
+The form must work even when the selected patient has no previous prescription.
+
+## 2. Patient Selection
+
+Allow the doctor to select a registered patient for whom the prescription is being created.
+
+Provide:
+- Patient search by name or patient ID.
+- Patient name and unique patient ID in the selection results.
+- A clear display of the selected patient's details before saving.
+
+If the doctor opens the form from an individual patient's profile, automatically select that patient.
+
+**Important:** Use the existing registered patient records. Do not create a duplicate patient record when creating a prescription.
+
+## 3. Prescription Form
+
+Create a structured prescription form containing the following fields:
+
+### Patient Information
+- Patient name
+- Patient ID
+- Age and gender, if available
+- Prescription date, defaulting to the current date
+
+Populate patient information from the existing database wherever possible.
+
+### Clinical Information
+- Diagnosis
+- Symptoms or clinical notes
+- Relevant investigation findings
+- Doctor's advice
+
+### Medication Details
+
+Allow the doctor to add one or multiple medications.
+
+For each medication, provide:
+- Medicine name
+- Strength or dosage
+- Dose
+- Route of administration
+- Frequency
+- Duration
+- Quantity, if applicable
+- Additional instructions
+
+Include an **"+ Add Medicine"** button to add multiple medication rows and a remove option to remove a medication row before saving.
+
+Allow the doctor to enter medication details manually if medicine search or autocomplete is not already supported by the application.
+
+### Additional Instructions
+- Dietary advice
+- Follow-up date
+- Additional notes
+
+Keep the form organized and easy for doctors to complete.
+
+Do not automatically prescribe medicines or generate clinical decisions using AI. The doctor must enter and approve all clinical information.
+
+## 4. Save and Create the Prescription
+
+When the doctor clicks **"Save Prescription"**:
+
+1. Validate the required fields.
+2. Confirm that a valid registered patient is selected.
+3. Ensure at least one medication is entered if the prescription is intended to contain medication orders.
+4. Save the new prescription to the existing backend/database.
+5. Associate the prescription with the selected patient and the authenticated doctor.
+6. Record the prescription creation date and time.
+7. Display a success message: "Prescription created successfully."
+8. Refresh the prescription list and patient details so the new prescription appears immediately.
+
+Prevent duplicate prescriptions caused by repeated clicks or network retries.
+
+If saving fails, display an understandable error message and preserve the doctor's entered information.
+
+## 5. Keep the Existing Update Prescription Feature
+
+Do not remove or break the existing **Update Prescription** functionality.
+
+The Doctor Portal must support both workflows:
+
+**Workflow A: Create a new prescription**
+- Select a registered patient.
+- Click Create Prescription.
+- Enter clinical and medication details.
+- Save the prescription.
+
+**Workflow B: Update an existing prescription**
+- Open an existing prescription.
+- Click Update/Edit.
+- Modify the permitted fields.
+- Save the changes.
+
+Display the appropriate action based on the existing prescription data, but do not prevent a doctor from creating a new prescription when an earlier prescription exists.
+
+If the patient has previous prescriptions, show the prescription history and provide a separate option to create a new prescription.
+
+Do not overwrite an old prescription when creating a new one.
+
+## 6. Prescription History
+
+Within the relevant patient details or prescription section, display previously created prescriptions in chronological order.
+
+For each prescription, show:
+- Prescription date
+- Prescribing doctor's name
+- Diagnosis, if available
+- Medication summary
+- Current status, if supported
+
+Allow the doctor to open an individual prescription to view its details.
+
+Preserve historical prescriptions. Creating a new prescription must create a new record rather than replace an existing one.
+
+## 7. Prescription Status and Medical Record Safety
+
+Use the existing prescription status system if one exists.
+
+If supported by the current application, distinguish between draft and finalized prescriptions.
+
+- A draft may be edited before finalization.
+- A finalized prescription should not be silently overwritten.
+- If finalized prescriptions need corrections, preserve the original record and use the application's existing correction or amendment workflow where available.
+
+Record the identity of the doctor who creates or updates a prescription.
+
+Do not invent a new clinical approval workflow if the application already has one.
+
+## 8. Database and Backend Integration
+
+Before implementing the feature, inspect the existing prescription tables, patient tables, doctor profiles, authentication, and database relationships.
+
+Requirements:
+- Reuse existing prescription tables and models wherever possible.
+- Add a database migration only if necessary.
+- Link each prescription to the correct patient and authenticated doctor.
+- Persist all prescription information so it remains available after refreshing the page or logging out and back in.
+- Use the existing API/backend conventions.
+- Add appropriate validation on both frontend and backend.
+- Follow the application's existing database security and row-level security policies, if applicable.
+
+Do not store prescriptions only in frontend state or browser storage.
+
+Do not hardcode sample patients, doctors, or prescriptions.
+
+## 9. Permissions and Security
+
+Only authorized doctors should be able to create prescriptions through the Doctor Portal.
+
+- A doctor must be authenticated before creating or updating a prescription.
+- Verify permissions on the backend, not only by hiding frontend buttons.
+- Associate the prescription with the authenticated doctor rather than trusting a doctor ID supplied by the browser.
+- Ensure doctors can access only the patient records and prescriptions permitted by the existing authorization rules.
+- Prevent patients and unauthorized users from creating or modifying prescriptions.
+- Do not weaken existing database security policies.
+
+If the application already has role-based access control, extend it rather than creating a separate authentication system.
+
+## 10. UI and Design Requirements
+
+Maintain the current Doctor Portal design.
+
+- Reuse existing buttons, cards, input styles, tables, modals, and typography.
+- Make the form responsive for desktop and tablet screens.
+- Provide clear loading, success, validation, and error states.
+- Disable the Save button while a submission is in progress.
+- Preserve the doctor's entered data if a request fails.
+- Avoid unnecessary redesigns of the Doctor Portal.
+
+## 11. Strict Scope Restrictions
+
+Make only the changes necessary to implement prescription creation and integrate it with the existing prescription management workflow.
+
+Do not:
+- Modify the Administrator Portal.
+- Modify the Patient Portal UI.
+- Change dialysis slot allocation.
+- Change dialysis machine management.
+- Change patient registration fields.
+- Remove existing prescription update functionality.
+- Delete or overwrite historical prescriptions.
+- Create duplicate patient, doctor, or prescription tables unnecessarily.
+- Replace the existing backend or authentication system.
+
+## 12. Testing Requirements
+
+After implementation, verify the following scenarios:
+
+1. A doctor can create a prescription for a registered patient with no previous prescription.
+2. A doctor can create a new prescription for a patient who already has prescription history.
+3. Multiple medicines can be added to one prescription.
+4. A medicine row can be removed before saving.
+5. Required-field validation prevents invalid submissions.
+6. The prescription persists after a page refresh.
+7. The newly created prescription appears in the patient's prescription history.
+8. Existing prescriptions can still be updated according to the existing permissions and workflow.
+9. Creating a new prescription does not overwrite an older prescription.
+10. Unauthorized users cannot create or modify prescriptions.
+11. Backend/database errors are handled without losing the entered form data.
+12. The Administrator Portal, Patient Portal, and dialysis scheduling functionality continue to work as before.
+
+**First inspect the existing implementation, then make the smallest complete set of changes needed. Do not merely create a visual button or mockup. Implement the actual working frontend, backend, database integration, and authorization required for prescription creation.**

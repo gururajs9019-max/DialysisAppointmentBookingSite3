@@ -27,6 +27,26 @@ export interface StaffData {
   analytics: StaffAnalytics;
 }
 
+export interface PrescriptionMedicationDetails extends RxMedication {
+  strength: string;
+  duration: string;
+  quantity: string;
+  instructions: string;
+}
+
+export interface DoctorPrescriptionCreatePayload {
+  patientId: string;
+  prescriptionDate: string;
+  diagnosis: string;
+  symptoms: string;
+  investigationFindings: string;
+  advice: string;
+  medications: PrescriptionMedicationDetails[];
+  dietaryAdvice: string;
+  followUpDate: string;
+  notes: string;
+}
+
 export class StaffApiError extends Error {
   constructor(message: string, public readonly operation: "load" | "save") {
     super(message);
@@ -147,10 +167,14 @@ function asMedications(value: unknown): RxMedication[] {
     .filter((med): med is Record<string, unknown> => Boolean(med) && typeof med === "object" && !Array.isArray(med))
     .map(med => ({
       name: asText(med.name),
+      strength: asText(med.strength),
       dose: asText(med.dose),
       frequency: asText(med.frequency),
       route: asText(med.route),
-    }));
+      duration: asText(med.duration),
+      quantity: asText(med.quantity),
+      instructions: asText(med.instructions),
+    })) as RxMedication[];
 }
 
 const asPrescription = (p: Record<string, any>): AdminPrescription => ({
@@ -158,6 +182,12 @@ const asPrescription = (p: Record<string, any>): AdminPrescription => ({
   diagnosis: p.diagnosis || "", status: p.status || "Active", issuedDate: p.createdAt || "", updatedBy: p.updatedBy || "Staff",
   updatedByRole: p.updatedByRole || "Doctor", lastUpdatedAt: p.updatedAt, dialysisRx: asDialysisRx(p.dialysisRx),
   medications: asMedications(p.medications), notes: p.notes || "", history: [],
+  prescriptionDate: asText(p.prescriptionDate),
+  symptoms: asText(p.symptoms),
+  investigationFindings: asText(p.investigationFindings),
+  advice: asText(p.advice),
+  dietaryAdvice: asText(p.dietaryAdvice),
+  followUpDate: asText(p.followUpDate),
   version: Number(p.version) || 1, createdAt: p.createdAt, createdBy: p.createdBy || p.updatedBy || "Staff",
   createdByRole: p.createdByRole || p.updatedByRole || "Doctor",
 }) as AdminPrescription;
@@ -293,6 +323,19 @@ export async function createPrescription(patientId: string, prescription: AdminP
   }, "save");
   const refreshed = await fetchPrescriptions();
   const saved = refreshed.find(item => item.patientId === patientId);
+  if (!saved) throw new StaffApiError("The new prescription could not be reloaded.", "load");
+  return saved;
+}
+
+export async function createDoctorPrescription(
+  requestId: string,
+  prescription: DoctorPrescriptionCreatePayload,
+): Promise<AdminPrescription> {
+  const result = await request<{ prescription: { id: string } }>("/api/prescriptions", {
+    method: "POST",
+    body: JSON.stringify({ ...prescription, requestId }),
+  }, "save");
+  const saved = (await fetchPrescriptions()).find(item => item.id === result.prescription.id);
   if (!saved) throw new StaffApiError("The new prescription could not be reloaded.", "load");
   return saved;
 }
