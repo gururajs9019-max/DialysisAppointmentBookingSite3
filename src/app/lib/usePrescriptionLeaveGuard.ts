@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { AdminPrescription } from "../AdminApp";
+import { useStaffDraftGuard, type StaffDraftState, type StaffDraftStateListener } from "./useStaffDraftGuard";
 
-export type PrescriptionDraftState = { dirty: boolean; saving: boolean };
-export type PrescriptionDraftStateListener = (state: PrescriptionDraftState) => void;
+export type PrescriptionDraftState = StaffDraftState;
+export type PrescriptionDraftStateListener = StaffDraftStateListener;
+export { useStaffLeaveGuard as usePrescriptionLeaveGuard } from "./useStaffDraftGuard";
 
 function fingerprint(draft: AdminPrescription): string {
   const rx = draft.dialysisRx;
@@ -18,48 +19,14 @@ function fingerprint(draft: AdminPrescription): string {
   });
 }
 
-function confirmDiscard(state: PrescriptionDraftState, fallbackMessage?: string): boolean {
-  if (state.saving) {
-    window.alert("The prescription is still being saved. Please wait before leaving.");
-    return false;
-  }
-  if (state.dirty) {
-    return window.confirm("You have unsaved prescription changes. Discard these changes and continue? Nothing will be saved.");
-  }
-  return fallbackMessage ? window.confirm(fallbackMessage) : true;
-}
-
-// Owned by a staff portal, not by the shared app or Patient Portal.
-export function usePrescriptionLeaveGuard() {
-  const state = useRef<PrescriptionDraftState>({ dirty: false, saving: false });
-  const onDraftStateChange = useCallback<PrescriptionDraftStateListener>(next => { state.current = next; }, []);
-  const confirmLeave = useCallback((fallbackMessage?: string) => confirmDiscard(state.current, fallbackMessage), []);
-  useEffect(() => {
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!state.current.dirty && !state.current.saving) return;
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, []);
-  return { onDraftStateChange, confirmLeave };
-}
-
 export function usePrescriptionDraftGuard(
   draft: AdminPrescription | null,
   saving: boolean,
   onStateChange: PrescriptionDraftStateListener,
 ) {
-  // Capture the editor's starting values, never the background-refreshed list.
-  const baseline = useRef<string | null>(null);
-  const dirty = draft !== null && baseline.current !== fingerprint(draft);
-  useLayoutEffect(() => {
-    onStateChange({ dirty, saving });
-    return () => onStateChange({ dirty: false, saving: false });
-  }, [dirty, saving, onStateChange]);
+  const guard = useStaffDraftGuard(draft ? fingerprint(draft) : null, saving, onStateChange, "prescription");
   return {
-    beginDraft: (next: AdminPrescription) => { baseline.current = fingerprint(next); },
-    confirmDiscard: () => confirmDiscard({ dirty, saving }),
+    beginDraft: (next: AdminPrescription) => guard.beginDraft(fingerprint(next)),
+    confirmDiscard: guard.confirmDiscard,
   };
 }

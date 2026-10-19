@@ -2,11 +2,13 @@ import { useState, useRef, useEffect } from "react";
 import { FileText, Plus, Search, User, Edit, Trash2, X, ChevronDown, Check } from "lucide-react";
 import type { Patient } from "../../AdminApp";
 import { createClinicalNote, fetchClinicalNotes, fetchAllClinicalNotes, updateClinicalNote, ClinicalNoteConflictError } from "../../lib/staffApi";
-import { ClinicalNoteConflict } from "./ClinicalNoteConflict";
+import { ClinicalNoteConflict, type NoteDraft } from "./ClinicalNoteConflict";
+import { useStaffDraftGuard, type StaffDraftStateListener } from "../../lib/useStaffDraftGuard";
 
 interface ClinicalNotesProps {
   onNavigate: (view: string) => void;
   patients: Patient[];
+  onDraftStateChange: StaffDraftStateListener;
 }
 
 interface NoteVitals {
@@ -157,7 +159,12 @@ function PatientSearchSelect({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNotesProps) {
+const emptyDraft: NoteDraft = { title: "", body: "", noteType: "session", bloodPressure: "", heartRate: "", weight: "", temperature: "" };
+const noteSnapshot = (patientId: string | null, draft: NoteDraft) => JSON.stringify({ patientId,
+  title: draft.title, body: draft.body, noteType: draft.noteType, bloodPressure: draft.bloodPressure,
+  heartRate: draft.heartRate, weight: draft.weight, temperature: draft.temperature });
+
+export function ClinicalNotes({ onNavigate: _onNavigate, patients, onDraftStateChange }: ClinicalNotesProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedNote, setSelectedNote] = useState<string | null>(null);
@@ -165,6 +172,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   const [saving, setSaving] = useState(false);
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const [conflict, setConflict] = useState(false);
+  const [reviewDirty, setReviewDirty] = useState(false);
 
   // Form state
   const [formPatient, setFormPatient] = useState<Patient | null>(null);
@@ -180,6 +188,12 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   const [notes, setNotes] = useState<Note[]>([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+  const currentDraft: NoteDraft = { body: formContent, title: formTitle, noteType: formNoteType,
+    bloodPressure: formBP, heartRate: formHR, weight: formWeight, temperature: formTemp };
+  const draftGuard = useStaffDraftGuard(
+    showAddForm ? noteSnapshot(formPatient?.id || null, currentDraft) : null,
+    saving, onDraftStateChange, "clinical note", reviewDirty,
+  );
 
   const loadNotes = async (patient?: Patient) => {
     setNotesLoading(true); setNotesError(null);
@@ -208,7 +222,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
 
   function resetForm() {
     setEditingId(null);
-    setBaseVersion(null); setConflict(false); setSaveError(null);
+    setBaseVersion(null); setConflict(false); setReviewDirty(false); setSaveError(null);
     setFormPatient(null);
     setFormNoteType("session");
     setFormTitle("");
@@ -221,8 +235,15 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
   }
 
   function handleCancelForm() {
+    if (!draftGuard.confirmDiscard()) return;
     resetForm();
     setShowAddForm(false);
+  }
+
+  function handleNewNote() {
+    if (!draftGuard.confirmDiscard()) return;
+    draftGuard.beginDraft(noteSnapshot(null, emptyDraft));
+    resetForm(); setShowAddForm(true);
   }
 
   async function handleSaveNote(e: React.FormEvent) {
@@ -280,7 +301,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
           </div>
           <button
             disabled={saving}
-            onClick={() => { resetForm(); setShowAddForm(!showAddForm); }}
+            onClick={handleNewNote}
             className="flex items-center gap-2 px-4 py-2 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-medium"
           >
             <Plus className="w-5 h-5" />
@@ -297,9 +318,11 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
             <fieldset disabled={saving} className="space-y-4 min-w-0">
             {conflict && editingId && formPatient && <ClinicalNoteConflict key={editingId}
               id={editingId} patientId={formPatient.id}
-              draft={{ body: formContent, title: formTitle, noteType: formNoteType, bloodPressure: formBP,
-                heartRate: formHR, weight: formWeight, temperature: formTemp }}
-              onResolve={(reviewed, version) => {
+              draft={currentDraft}
+              onReviewChange={setReviewDirty}
+              onResolve={(reviewed, version, saved) => {
+                draftGuard.beginDraft(noteSnapshot(formPatient.id, saved));
+                setReviewDirty(false);
                 setFormContent(reviewed.body); setFormTitle(reviewed.title); setFormNoteType(reviewed.noteType);
                 setFormBP(reviewed.bloodPressure); setFormHR(reviewed.heartRate);
                 setFormWeight(reviewed.weight); setFormTemp(reviewed.temperature);
@@ -494,7 +517,14 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
                   className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
                   title="Edit clinical note"
                   onClick={e => {
-                    e.stopPropagation(); setEditingId(note.id); setBaseVersion(note.version); setConflict(false);
+                    e.stopPropagation();
+                    if (!draftGuard.confirmDiscard()) return;
+                    draftGuard.beginDraft(noteSnapshot(note.patientId, {
+                      body: note.content, title: note.title, noteType: note.noteType,
+                      bloodPressure: note.vitals?.bloodPressure || "", heartRate: note.vitals?.heartRate || "",
+                      weight: note.vitals?.weight || "", temperature: note.vitals?.temperature || "",
+                    }));
+                    setReviewDirty(false); setEditingId(note.id); setBaseVersion(note.version); setConflict(false);
                     setFormPatient(patients.find(p=>p.id===note.patientId)||null);
                     setFormTitle(note.title); setFormContent(note.content); setFormNoteType(note.noteType);
                     setFormBP(note.vitals?.bloodPressure||""); setFormHR(note.vitals?.heartRate||"");
@@ -552,7 +582,7 @@ export function ClinicalNotes({ onNavigate: _onNavigate, patients }: ClinicalNot
           <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 mb-4">No clinical notes found</p>
           <button
-            onClick={() => { resetForm(); setShowAddForm(true); }}
+            onClick={handleNewNote}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
           >
             Add First Note

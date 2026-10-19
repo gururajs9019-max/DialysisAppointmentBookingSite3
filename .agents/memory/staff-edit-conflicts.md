@@ -9,6 +9,12 @@ Never advance an open prescription or clinical-note draft's base version just be
 
 **How to apply:** Preserve this distinction when changing staff synchronization, history loading, or edit recovery. Failed comparisons must leave the draft and its original base available for retry. Unsaved-change warnings must compare against the editor's starting values, not redefine clean/dirty from a background refresh; warnings must not autosave clinical decisions.
 
+After explicit clinical-note conflict review, the clean baseline is the newer saved note, not the merged values applied to the editor. Pending field choices also count as unsaved changes.
+
+**Why:** Applying reviewed values is not a save. Treating the reviewed draft as clean could discard clinical decisions without warning, while choosing only saved values should not cause unnecessary warnings.
+
+**How to apply:** Preserve choices when staff cancel leaving, and keep warnings active for retained draft values until saved, reverted to the reviewed saved values, or explicitly discarded. Never persist clinical drafts in browser storage.
+
 Use integer database revisions for clinical-note concurrency instead of timestamp equality.
 
 **Why:** Timestamp serialization can lose database precision, and timestamps are display metadata rather than a reliable editor baseline. Notes can be edited by both their author and an administrator, so either writer must detect stale changes.

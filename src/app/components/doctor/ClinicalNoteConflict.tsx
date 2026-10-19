@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { fetchClinicalNotes, type ClinicalNoteDto } from "../../lib/staffApi";
 
 export type NoteDraft = { body: string; title: string; noteType: string; bloodPressure: string; heartRate: string; weight: string; temperature: string };
@@ -15,23 +15,30 @@ function asDraft(note: ClinicalNoteDto): NoteDraft {
   };
 }
 
-export function ClinicalNoteConflict({ id, patientId, draft, onResolve }: {
+export function ClinicalNoteConflict({ id, patientId, draft, onResolve, onReviewChange }: {
   id: string; patientId: string; draft: NoteDraft;
-  onResolve: (draft: NoteDraft, version: number) => void;
+  onResolve: (draft: NoteDraft, version: number, saved: NoteDraft) => void;
+  onReviewChange: (changed: boolean) => void;
 }) {
   const [latest, setLatest] = useState<ClinicalNoteDto | null>(null);
   const [choices, setChoices] = useState<Partial<Record<keyof NoteDraft, "draft" | "latest">>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   async function compare() {
     setLoading(true); setError(null);
     try {
       const result = await fetchClinicalNotes(patientId);
+      if (!active.current) return;
       const note = result.notes.find(row => row.id === id);
       if (!note || !Number.isSafeInteger(note.version)) throw new Error("The newer note could not be loaded.");
-      setLatest(note); setChoices({});
-    } catch (error) { setError(error instanceof Error ? error.message : "Comparison failed. Try again."); }
-    finally { setLoading(false); }
+      setLatest(note); setChoices({}); onReviewChange(false);
+    } catch (error) { if (active.current) setError(error instanceof Error ? error.message : "Comparison failed. Try again."); }
+    finally { if (active.current) setLoading(false); }
   }
   const newer = latest ? asDraft(latest) : null;
   return (
@@ -54,7 +61,10 @@ export function ClinicalNoteConflict({ id, patientId, draft, onResolve }: {
                     <span className="flex gap-2 items-center">
                       <input type="radio" aria-label={source === "latest" ? `Use newer: ${label}` : `Keep my draft: ${label}`}
                         name={`note-conflict-${id}-${key}`} checked={(choices[key] || "latest") === source}
-                        onChange={() => setChoices(prev => ({ ...prev, [key]: source }))} />
+                        onChange={() => {
+                          setChoices(prev => ({ ...prev, [key]: source }));
+                          onReviewChange(true);
+                        }} />
                       {source === "latest" ? `Use newer: ${label}` : `Keep my draft: ${label}`}
                     </span>
                     <span className="block whitespace-pre-wrap break-words mt-1 text-slate-700">{(source === "latest" ? newer : draft)[key] || "Not recorded"}</span>
@@ -67,7 +77,7 @@ export function ClinicalNoteConflict({ id, patientId, draft, onResolve }: {
         <button type="button" onClick={() => {
           const reviewed = { ...newer };
           for (const { key } of fields) if (choices[key] === "draft") reviewed[key] = draft[key];
-          onResolve(reviewed, latest.version);
+          onResolve(reviewed, latest.version, newer);
         }} className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white">
           Apply reviewed values to editor
         </button>

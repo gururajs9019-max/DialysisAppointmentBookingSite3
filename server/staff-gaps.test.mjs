@@ -153,10 +153,11 @@ try {
 } finally {
   try {
     const sessions=ids.patients.length?(await db.query("SELECT id FROM dialysis_sessions WHERE patient_id=ANY($1::text[])",[ids.patients])).rows.map(s=>s.id):[];
+    const notes=ids.patients.length?(await db.query("SELECT id FROM clinical_notes WHERE patient_id=ANY($1::text[])",[ids.patients])).rows.map(n=>n.id):[];
     await db.query("DELETE FROM audit_logs WHERE entity_id=ANY($1::text[]) OR actor_id=ANY($2::text[])",
-      [[...ids.patients,...ids.machines,...ids.notes,...ids.users,...sessions],ids.users]);
+      [[...ids.patients,...ids.machines,...notes,...ids.users,...sessions],ids.users]);
     await db.query("DELETE FROM notifications WHERE detail LIKE $1 OR user_id=ANY($2::text[])",[`%${run}%`,ids.users]);
-    await db.query("DELETE FROM clinical_notes WHERE id=ANY($1::text[])",[ids.notes]);
+    await db.query("DELETE FROM clinical_notes WHERE id=ANY($1::text[])",[notes]);
     await db.query("DELETE FROM dialysis_sessions WHERE patient_id=ANY($1::text[])",[ids.patients]);
     await db.query("DELETE FROM dialysis_machines WHERE id=ANY($1::text[])",[ids.machines]);
     await db.query("DELETE FROM patients WHERE id=ANY($1::text[])",[ids.patients]);

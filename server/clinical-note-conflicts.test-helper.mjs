@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium, expect } from "@playwright/test";
+import { verifyClinicalNoteDraftWarnings } from "./clinical-note-drafts.test-helper.mjs";
 
 // Runs inside staff-gaps.test.mjs using only its synthetic records and cleanup.
 export async function verifyClinicalNoteConflicts({ base, db, admin, author, otherDoctor, patient, noteId, email, password, run }) {
@@ -140,7 +141,8 @@ export async function verifyClinicalNoteConflicts({ base, db, admin, author, oth
     const audit = (await db.query("SELECT metadata FROM audit_logs WHERE entity_id=$1 AND action='note.update' ORDER BY created_at DESC LIMIT 1", [noteId])).rows[0].metadata;
     assert.equal(audit.before.version, saved.version - 1);
     assert.equal(audit.after.version, saved.version);
-    assert.deepEqual(errors, [], "note conflict workflows have no runtime errors");
+    await verifyClinicalNoteDraftWarnings({ page: loser, patient, noteId, readNote: current, request, admin, run });
+    assert.deepEqual(errors, [], "note conflict and draft workflows have no runtime errors");
     console.log("clinical note conflict tests passed (both writer roles, races, validation, side effects, preserved drafts, refresh, failed comparison/retry, review and save)");
   } finally { await browser.close(); }
 }
