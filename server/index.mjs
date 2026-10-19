@@ -216,6 +216,43 @@ async function api(req, res, url) {
     if (parts[1]==="appointments" && parts.length===3 && req.method==="PATCH") { await requireStaff(req); sendJson(res,200,{appointment:await appointmentUpdate(decodeURIComponent(parts[2]),await readJson(req))}); return true; }
 
     if (await extendedStaffApi(req,res,url)) return true;
+    if (req.method === "POST" && path === "/api/prescription-histories") {
+      await requireStaff(req);
+      const payload = object(await readJson(req));
+      if (!Array.isArray(payload.prescriptions) || payload.prescriptions.length > 5000) {
+        throw httpError(400, "prescriptions must be a list of at most 5000 records.");
+      }
+      const requested = new Map();
+      for (const value of payload.prescriptions) {
+        const item = object(value, "prescription");
+        const id = text(item.id, "prescription id", { required: true, max: 200 });
+        if (!Number.isSafeInteger(item.version) || item.version < 1) {
+          throw httpError(400, "Each prescription requires a positive integer version.");
+        }
+        requested.set(id, Math.max(requested.get(id) || 0, item.version));
+      }
+      const histories = new Map([...requested.keys()].map(id => [id, []]));
+      if (requested.size) {
+        const rows = await pool.query(`
+          WITH requested AS (
+            SELECT id, version
+            FROM jsonb_to_recordset($1::jsonb) AS record(id text, version integer)
+          )
+          SELECT pv.prescription_id, pv.version, pv.snapshot, pv.created_at,
+                 pv.changed_by, u.name changed_by_name, u.role changed_by_role
+          FROM requested r
+          JOIN prescription_versions pv
+            ON pv.prescription_id = r.id AND pv.version < r.version
+          LEFT JOIN portal_users u ON u.id = pv.changed_by
+          ORDER BY pv.prescription_id, pv.version DESC
+        `, [JSON.stringify([...requested].map(([id, version]) => ({ id, version })))]);
+        for (const row of rows.rows) histories.get(row.prescription_id)?.push(row);
+      }
+      sendJson(res, 200, {
+        histories: [...histories].map(([prescriptionId, history]) => ({ prescriptionId, history })),
+      });
+      return true;
+    }
     if (path === "/api/users" && req.method === "GET") { await requireStaff(req,"admin"); const r=await pool.query("SELECT id,username,email,name,role,created_at FROM portal_users ORDER BY name"); sendJson(res,200,{users:r.rows}); return true; }
     if (path === "/api/users" && req.method === "POST") { const actor=await requireStaff(req,"admin"), x=object(await readJson(req)), role=text(x.role,"role",{required:true}); if(!ROLES.includes(role)) throw httpError(400,"Invalid staff role."); const password=text(x.password,"password",{required:true,max:512}); if(password.length<12) throw httpError(400,"Password must be at least 12 characters."); const id=randomUUID(); try { const r=await pool.query("INSERT INTO portal_users(id,username,email,name,role,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,username,email,name,role,created_at",[id,text(x.username,"username",{max:80})||null,text(x.email,"email",{required:true,max:320}),text(x.name,"name",{required:true}),role,hashPassword(password)]); await transaction(c=>audit(c,actor,"user.create","user",id,{role})); sendJson(res,201,{user:r.rows[0]}); } catch(e) { if(e.code==="23505") throw httpError(409,"Username or email already exists."); throw e; } return true; }
 

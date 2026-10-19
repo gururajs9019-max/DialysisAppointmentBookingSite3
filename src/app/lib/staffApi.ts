@@ -169,28 +169,6 @@ export function clearPrescriptionHistoryCache(): void {
   prescriptionHistoryCache.clear();
 }
 
-function fetchPrescriptionHistory(prescription: AdminPrescription): Promise<PrescriptionHistory> {
-  const version = prescription.version || 1;
-  const cached = prescriptionHistoryCache.get(prescription.id);
-  if (cached?.version === version) return cached.history;
-
-  const entry = {
-    version,
-    history: request<{ history: Record<string, any>[] }>(`/api/prescriptions/${encodeURIComponent(prescription.id)}/history`)
-      .then(result => result.history
-        .filter(row => Number(row.version) < version)
-        .map(asHistory)
-        .sort((a, b) => b.version - a.version)),
-  };
-  prescriptionHistoryCache.set(prescription.id, entry);
-  // Share in-flight requests, but never retain a failure or let an older request
-  // evict a newer version. A failed history still fails the staff load visibly.
-  entry.history.catch(() => {
-    if (prescriptionHistoryCache.get(prescription.id) === entry) prescriptionHistoryCache.delete(prescription.id);
-  });
-  return entry.history;
-}
-
 export async function fetchPrescriptions(): Promise<AdminPrescription[]> {
   const result = await request<{ prescriptions: Record<string, any>[] }>("/api/prescriptions");
   const prescriptions = result.prescriptions.map(asPrescription);
@@ -198,9 +176,76 @@ export async function fetchPrescriptions(): Promise<AdminPrescription[]> {
   for (const id of prescriptionHistoryCache.keys()) {
     if (!ids.has(id)) prescriptionHistoryCache.delete(id);
   }
+
+  const pending: Array<{
+    prescription: AdminPrescription;
+    entry: { version: number; history: Promise<PrescriptionHistory> };
+    resolve: (history: PrescriptionHistory) => void;
+    reject: (reason: unknown) => void;
+  }> = [];
+  const historyPromises = new Map<string, Promise<PrescriptionHistory>>();
+  for (const prescription of prescriptions) {
+    const version = prescription.version || 1;
+    const cached = prescriptionHistoryCache.get(prescription.id);
+    if (cached?.version === version) {
+      historyPromises.set(prescription.id, cached.history);
+      continue;
+    }
+
+    let resolve!: (history: PrescriptionHistory) => void;
+    let reject!: (reason: unknown) => void;
+    const history = new Promise<PrescriptionHistory>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    const entry = { version, history };
+    prescriptionHistoryCache.set(prescription.id, entry);
+    // Failed batches are retried, and an older response cannot evict a newer
+    // revision's in-flight entry.
+    history.catch(() => {
+      if (prescriptionHistoryCache.get(prescription.id) === entry) {
+        prescriptionHistoryCache.delete(prescription.id);
+      }
+    });
+    pending.push({ prescription, entry, resolve, reject });
+    historyPromises.set(prescription.id, history);
+  }
+
+  if (pending.length) {
+    request<{ histories: Array<{ prescriptionId: string; history: Record<string, any>[] }> }>(
+      "/api/prescription-histories",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          prescriptions: pending.map(({ prescription, entry }) => ({
+            id: prescription.id,
+            version: entry.version,
+          })),
+        }),
+      },
+    ).then(result => {
+      if (!Array.isArray(result.histories)) throw new StaffApiError("Prescription history response was invalid.", "load");
+      const byId = new Map(result.histories.map(item => [item.prescriptionId, item.history]));
+      if (pending.some(({ prescription }) => !Array.isArray(byId.get(prescription.id)))) {
+        throw new StaffApiError("Prescription history response was incomplete.", "load");
+      }
+      for (const { prescription, entry, resolve } of pending) {
+        const rows = byId.get(prescription.id);
+        resolve(rows
+          .filter(row => Number(row.version) < entry.version)
+          .map(asHistory)
+          .sort((a, b) => b.version - a.version));
+      }
+    }).catch(error => {
+      for (const item of pending) item.reject(error);
+    });
+  }
+
   await Promise.all(prescriptions.map(async prescription => {
+    const history = historyPromises.get(prescription.id);
+    if (!history) throw new StaffApiError("Prescription history was not loaded.", "load");
     // Keep cached snapshots isolated from form drafts and comparison views.
-    prescription.history = structuredClone(await fetchPrescriptionHistory(prescription));
+    prescription.history = structuredClone(await history);
   }));
   return prescriptions;
 }
