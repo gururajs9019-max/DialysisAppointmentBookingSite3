@@ -26,3 +26,21 @@ Replit Publish automatically diffs the development schema against production
 and applies the resulting schema changes. Publish or re-publish after merging a
 schema change. The application does not run schema DDL at startup or in
 production deployment code.
+
+## Approved two-step publishing migration
+
+The schema is currently prepared for **Publish phase 1**: the
+`prescriptions_id_patient` UNIQUE constraint is present, while the development
+`session_patient_prescription` foreign key is temporarily removed with the
+user's approval. API validation of patient/prescription ownership remains active.
+
+Do not restore that foreign key until the user confirms the first publish
+succeeded, or read-only production catalog queries confirm the referenced
+UNIQUE constraint is present there. Then replace the phase-1 constraint removal
+in the schema source with repeatable creation of the composite foreign key,
+restore the corresponding database-integrity assertions in both schema and staff
+backend tests, apply the development schema, and recompute the Publish diff for
+the second publish.
+
+Never truncate prescription data or add deployment/startup DDL to bypass this
+sequence. Both production schema changes must go through Publish.
