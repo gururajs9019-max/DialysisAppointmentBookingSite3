@@ -6,6 +6,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { malformedRequests, rawHttp } from "./raw-http.test-helper.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const distIndex = join(root, "dist", "index.html");
@@ -87,6 +88,27 @@ try {
     assert.equal(child.signalCode, null, "production process should not be terminated");
     return body;
   }
+  const originalPid = child.pid;
+  for (const input of malformedRequests()) {
+    const result = await rawHttp(port, input);
+    assert.match(result, /^HTTP\/1.1 500 /, "malformed requests get a generic error");
+    assert.match(result, /Unexpected server error\./);
+    assert.doesNotMatch(result, /private-|ERR_INVALID_URL|TypeError/);
+    await check("/", 200, /text\/html/, html);
+    await check("/patient", 200, /text\/html/, html);
+    await check("/api/patients", 401, /application\/json/, '{"error":"Sign in is required."}');
+    assert.equal(child.pid, originalPid, "recovery must not rely on a replacement process");
+  }
+  await check("/api/auth/login", 400, /application\/json/, '{"error":"Request body must be valid JSON."}', {
+    method: "POST", body: "{", headers: { "Content-Type": "application/json" },
+  });
+  assert.equal(
+    stderr.split("Unexpected request handler failure.").length - 1,
+    malformedRequests().length,
+    "each unexpected rejection should be logged",
+  );
+  assert.doesNotMatch(stderr, /private-|ERR_INVALID_URL|TypeError/, "request data must not appear in boundary logs");
+  console.log("production malformed-request same-process regressions passed");
   for (const asset of html.matchAll(/(?:src|href)="([^"]+\.(js|css))"/g)) {
     const body = await check(asset[1], 200, asset[2] === "js" ? /text\/javascript/ : /text\/css/);
     assert.ok(body.length > 0, "built asset should have content");

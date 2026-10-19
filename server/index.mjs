@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { staffServices } from "./staff-services.mjs";
 import { validateSessionLinks } from "./session-clinical-links.mjs";
+import { withRequestErrorBoundary } from "./request-error-boundary.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -550,7 +551,7 @@ async function start() {
   }
 
   let vite;
-  const server = createServer(async (req, res) => {
+  const server = createServer(withRequestErrorBoundary(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (await api(req, res, url)) return;
     if (production) {
@@ -562,7 +563,7 @@ async function start() {
       res.statusCode = 404;
       res.end("Not found");
     });
-  });
+  }));
   if (!production) {
     const { createServer: createViteServer } = await import("vite");
     vite = await createViteServer({ server: { middlewareMode: true, hmr: { server } }, appType: "spa" });
