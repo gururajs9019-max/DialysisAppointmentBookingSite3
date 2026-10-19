@@ -7,6 +7,7 @@ import { Pool } from "pg";
 import { staffServices } from "./staff-services.mjs";
 import { validateSessionLinks } from "./session-clinical-links.mjs";
 import { withRequestErrorBoundary } from "./request-error-boundary.mjs";
+import { apiErrorResponse, httpError } from "./api-errors.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -24,7 +25,6 @@ function sendJson(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers });
   res.end(status === 204 ? undefined : JSON.stringify(body));
 }
-function httpError(statusCode, message) { const error = new Error(message); error.statusCode = statusCode; return error; }
 function text(value, field, { required = false, max = 2000 } = {}) {
   if (value == null && !required) return undefined;
   if (typeof value !== "string" || (required && !value.trim()) || value.length > max) throw httpError(400, `Invalid ${field}.`);
@@ -219,7 +219,7 @@ async function appointmentUpdate(id, input) {
 
 const extendedStaffApi = staffServices({ pool, requireStaff, readJson, object, text, httpError, sendJson,
   transaction, audit, notifyRole, hashPassword, validatePatient, patientDto, fetchPatient, recalculateMachineAvailability, requiredViralCategory, dateKey });
-async function api(req, res, url) {
+export async function api(req, res, url) {
   const path = url.pathname, parts = path.split("/").filter(Boolean);
   try {
     if (req.method === "POST" && path === "/api/auth/login") { const user = await login(await readJson(req)); const { password_hash, ...safe } = user; sendJson(res,200,{user:safe},{"Set-Cookie":sessionCookie(user)}); return true; }
@@ -505,7 +505,11 @@ async function api(req, res, url) {
     if (path === "/api/analytics" && req.method==="GET") { await requireStaff(req); const r=await pool.query("SELECT (SELECT count(*) FROM patients) patients,(SELECT count(*) FROM patients WHERE lifecycle='Active') active_patients,(SELECT count(*) FROM dialysis_machines WHERE status='available') available_machines,(SELECT count(*) FROM dialysis_sessions WHERE session_date=current_date AND status NOT IN ('cancelled','missed')) today_sessions,(SELECT count(*) FROM dialysis_sessions WHERE status='missed' AND session_date >= current_date-30) missed_last_30_days"); sendJson(res,200,{analytics:r.rows[0]}); return true; }
     if (path === "/api/audit-logs" && req.method==="GET") { await requireStaff(req,"admin"); const r=await pool.query("SELECT a.*,u.name actor_name,u.role actor_role FROM audit_logs a LEFT JOIN portal_users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 500"); sendJson(res,200,{auditLogs:r.rows}); return true; }
     if (path.startsWith("/api/")) { sendJson(res,404,{error:"API route not found"}); return true; } return false;
-  } catch (error) { const status=error.statusCode || (error.code === "42P01" ? 503 : 500); if(status>=500) console.error("API error:",error); sendJson(res,status,{error:error.message || "Unexpected server error.", ...(["PRESCRIPTION_VERSION_CONFLICT","CLINICAL_NOTE_VERSION_CONFLICT"].includes(error.code) ? {code:error.code,currentVersion:error.currentVersion} : {})}); return true; }
+  } catch (error) {
+    const { status, body } = apiErrorResponse(error);
+    sendJson(res, status, body);
+    return true;
+  }
 }
 
 async function start() {
