@@ -9,3 +9,4 @@
 - [Prescription record safety](prescription-record-safety.md) — New prescriptions remain separate records; retry deduplication must not block legitimate repeat prescriptions.
 - [Error diagnostic privacy](error-diagnostic-privacy.md) — Preserve clinical/account privacy during troubleshooting; do not restore full exception dumps to debug publishing.
 - [HTTP upload safety](http-upload-safety.md) — Test byte limits over real TCP; default stream iteration can close a socket before its error reply.
+- [Registration clinical safety](registration-clinical-safety.md) — Simpler controls must preserve historical readings; registration weights remain independently entered values.

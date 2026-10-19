@@ -130,6 +130,19 @@ export function validatePatient(input, partial = false) {
   if ("treatmentStatus" in input) { if (!LIFECYCLES.includes(input.treatmentStatus)) throw httpError(400, "Invalid treatment status."); out.treatmentStatus = input.treatmentStatus; }
   for (const key of ["dateOfBirth", "registeredDate", "age", "gender", "mobile", "address", "city", "primaryDisease", "causeOfFailure", "biopsyDone", "biopsyDetails", "comorbidities", "bloodGroup", "dialysisStartDate", "referredBy", "treatingNephrologist", "emergencyContact", "insurance", "remarks", "dialysisDaysPerWeek", "dialysisDays", "registrationFields", "medicalInfo", "investigations"]) if (key in input) out[key] = input[key];
   for (const key of ["medicalInfo", "investigations", "registrationFields"]) if (key in out) object(out[key],key);
+  if (out.medicalInfo) {
+    out.medicalInfo = { ...out.medicalInfo };
+    for (const [key, label] of [["dryWeight", "Dry weight"], ["weightGain", "Weight gain"]]) {
+      const value = out.medicalInfo[key];
+      if (value === undefined || value === null || value === "") continue;
+      const numeric = Number(value);
+      if (!["number", "string"].includes(typeof value) || !String(value).trim() || !Number.isFinite(numeric) ||
+          numeric < 0 || (key === "dryWeight" && numeric === 0)) {
+        throw httpError(400, `${label} must be a number ${key === "dryWeight" ? "greater than 0" : "of at least 0"} kg.`);
+      }
+      out.medicalInfo[key] = numeric;
+    }
+  }
   return out;
 }
 function patientDto(row) { const data = row.data; return { id: row.id, uhid: row.uhid, ...data, viralCategory: row.viral_category, treatmentStatus: row.lifecycle, viralStatus: data.viralStatus ?? {}, createdAt: row.created_at, updatedAt: row.updated_at }; }

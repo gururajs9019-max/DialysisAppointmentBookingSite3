@@ -722,8 +722,8 @@ function Step1SelectPatient({ patients, selected, onSelect }: {
                 <div className="flex flex-col gap-1.5 items-end shrink-0">
                   <div className="flex gap-1 flex-wrap justify-end">
                     <span className="text-[9px] font-bold text-slate-400">HBsAg</span><ViralBadge status={p.viralStatus.hepatitisB} />
-                    <span className="text-[9px] font-bold text-slate-400">HCV</span><ViralBadge status={p.viralStatus.hepatitisC} />
-                    <span className="text-[9px] font-bold text-slate-400">HIV</span><ViralBadge status={p.viralStatus.hiv} />
+                    <span className="text-[9px] font-bold text-slate-400">Anti HCV</span><ViralBadge status={p.viralStatus.hepatitisC} />
+                    <span className="text-[9px] font-bold text-slate-400">HIV I/II</span><ViralBadge status={p.viralStatus.hiv} />
                   </div>
                   <CategoryBadge category={req} />
                   <p className="text-[10px] text-slate-400">Last: {p.lastDialysis}</p>
@@ -2506,8 +2506,8 @@ function SearchSection({ patients, sessions, onNavigate, onAssignPatient }: {
 
             <div className="mt-4 flex flex-wrap gap-2">
               <span className="text-[10px] text-slate-400">HBsAg</span><ViralBadge status={selected.viralStatus.hepatitisB} />
-              <span className="text-[10px] text-slate-400">HCV</span><ViralBadge status={selected.viralStatus.hepatitisC} />
-              <span className="text-[10px] text-slate-400">HIV</span><ViralBadge status={selected.viralStatus.hiv} />
+              <span className="text-[10px] text-slate-400">Anti HCV</span><ViralBadge status={selected.viralStatus.hepatitisC} />
+              <span className="text-[10px] text-slate-400">HIV I/II</span><ViralBadge status={selected.viralStatus.hiv} />
             </div>
 
             {selected.remarks && (
@@ -3270,8 +3270,10 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                       {[
                         { label: "Comorbidities", value: firstDetailValue(p.comorbidities, recordValue(medicalInfo, "comorbidities")) },
-                        { label: "Hypertension", value: firstDetailValue(recordValue(medicalInfo, "hypertension", "htn"), p.comorbidities.toLowerCase().includes("hypertension") ? "Yes" : undefined) },
-                        { label: "Diabetes", value: firstDetailValue(recordValue(medicalInfo, "diabetes", "dm"), p.comorbidities.toLowerCase().includes("diabetes") ? "Yes" : undefined) },
+                        { label: "Hypertension", value: patientComorbidityValue(p, "hypertension", recordValue(medicalInfo, "hypertension", "htn")) },
+                        { label: "Diabetes", value: patientComorbidityValue(p, "diabetes", recordValue(medicalInfo, "diabetes", "dm")) },
+                        { label: "Dry Weight", value: weightDetailValue(recordValue(medicalInfo, "dryWeight")) },
+                        { label: "Weight Gain", value: weightDetailValue(recordValue(medicalInfo, "weightGain")) },
                         { label: "Dialysis Access", value: firstDetailValue(recordValue(medicalInfo, "dialysisAccess", "access", "accessType"), recordValue(registration, "dialysisAccess", "accessType")) },
                         { label: "AV Fistula", value: firstDetailValue(recordValue(medicalInfo, "avFistula", "avf")) },
                         { label: "Permacath", value: firstDetailValue(recordValue(medicalInfo, "permacath", "tunnelledCatheter")) },
@@ -3281,8 +3283,8 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         { label: "Renal Function Test", value: firstDetailValue(recordValue(investigations, "rft", "renalFunctionTest", "RFT")) },
                         { label: "LFT", value: firstDetailValue(recordValue(investigations, "lft", "LFT")) },
                         { label: "HBsAg", value: p.viralStatus.hepatitisB },
-                        { label: "HIV", value: p.viralStatus.hiv },
-                        { label: "Hepatitis C", value: p.viralStatus.hepatitisC },
+                        { label: "HIV I/II", value: p.viralStatus.hiv },
+                        { label: "Anti HCV", value: p.viralStatus.hepatitisC },
                         { label: "Serum Calcium", value: firstDetailValue(recordValue(investigations, "serumCalcium", "calcium")) },
                         { label: "Serum Phosphorous", value: firstDetailValue(recordValue(investigations, "serumPhosphorous", "phosphorous", "phosphorus")) },
                         { label: "Serum Ferritin", value: firstDetailValue(recordValue(investigations, "serumFerritin", "ferritin")) },
@@ -3981,8 +3983,8 @@ function ViralStatusSection({ patients, onPatientUpdated }: { patients: Patient[
               <tr className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wider">
                 <th className="text-left px-5 py-3">Patient</th>
                 <th className="text-left px-5 py-3">HBsAg</th>
-                <th className="text-left px-5 py-3">HCV</th>
-                <th className="text-left px-5 py-3">HIV</th>
+                <th className="text-left px-5 py-3">Anti HCV</th>
+                <th className="text-left px-5 py-3">HIV I/II</th>
                 <th className="text-left px-5 py-3">Required Machine</th>
                 <th className="px-5 py-3"></th>
               </tr>
@@ -4022,7 +4024,7 @@ function ViralStatusSection({ patients, onPatientUpdated }: { patients: Patient[
               <button onClick={() => setEditing(null)} className="p-2 hover:bg-slate-100 rounded-xl"><X className="w-4 h-4 text-slate-500" /></button>
             </div>
             <div className="space-y-4">
-              {(["HBsAg (Hepatitis B)", "HCV (Hepatitis C)", "HIV"] as const).map((label, i) => {
+              {(["HBsAg (Hepatitis B)", "Anti HCV", "HIV I/II"] as const).map((label, i) => {
                 const keys = ["hepatitisB", "hepatitisC", "hiv"] as const;
                 const key = keys[i];
                 return (
@@ -4536,15 +4538,15 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           <h4 className="font-bold text-slate-800 mb-4">Vitals</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div ref={refs.dryWeight}>
-              <label className={labelCls}>Dry Weight (kg)</label>
-              <input type="number" min="0.1" step="any" inputMode="decimal" value={dryWeight}
+              <label htmlFor="register-dry-weight" className={labelCls}>Dry Weight (kg)</label>
+              <input id="register-dry-weight" type="number" min="0" step="any" inputMode="decimal" value={dryWeight}
                 onChange={e => setDryWeight(e.target.value)} placeholder="e.g. 52.5"
                 className={fldCls(!!errors.dryWeight)} />
               <RegErrMsg error={errors.dryWeight} />
             </div>
             <div ref={refs.weightGain}>
-              <label className={labelCls}>Weight Gain (kg)</label>
-              <input type="number" min="0" step="any" inputMode="decimal" value={weightGain}
+              <label htmlFor="register-weight-gain" className={labelCls}>Weight Gain (kg)</label>
+              <input id="register-weight-gain" type="number" min="0" step="any" inputMode="decimal" value={weightGain}
                 onChange={e => setWeightGain(e.target.value)} placeholder="e.g. 2.5"
                 className={fldCls(!!errors.weightGain)} />
               <RegErrMsg error={errors.weightGain} />
@@ -4620,22 +4622,22 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
               </div>
             </RegInvestRow>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 py-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 py-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Ferritin</label>
-                <input type="number" step="any" min="0" value={serumFerritin}
+                <label htmlFor="register-serum-ferritin" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Ferritin</label>
+                <input id="register-serum-ferritin" type="number" step="any" min="0" value={serumFerritin}
                   onChange={e => setSerumFerritin(e.target.value)} placeholder="—"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Calcium</label>
-                <input type="number" step="any" min="0" value={serumCalcium}
+                <label htmlFor="register-serum-calcium" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Calcium</label>
+                <input id="register-serum-calcium" type="number" step="any" min="0" value={serumCalcium}
                   onChange={e => setSerumCalcium(e.target.value)} placeholder="—"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Phosphorous</label>
-                <input type="number" step="any" min="0" value={serumPhos}
+                <label htmlFor="register-serum-phosphorous" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Serum Phosphorous</label>
+                <input id="register-serum-phosphorous" type="number" step="any" min="0" value={serumPhos}
                   onChange={e => setSerumPhos(e.target.value)} placeholder="—"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
               </div>
@@ -4687,16 +4689,16 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             <FlaskConical className="w-4 h-4 text-blue-600" />
             <h4 className="font-bold text-slate-800">LFT</h4>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
             {([
-              ["Total Protein",         "lftTotalProtein"],
-              ["Albumin",               "lftAlbumin"],
-              ["Total Bilirubin (TB)",  "lftTotalBilirubin"],
-              ["Direct Bilirubin (DB)", "lftDirectBilirubin"],
-              ["AST",                   "lftAst"],
-              ["ALT",                   "lftAlt"],
-              ["ALP",                   "lftAlp"],
-            ] as const).map(([lbl]) => {
+              ["Total Protein",         "register-lft-total-protein"],
+              ["Albumin",               "register-lft-albumin"],
+              ["Total Bilirubin (TB)",  "register-lft-total-bilirubin"],
+              ["Direct Bilirubin (DB)", "register-lft-direct-bilirubin"],
+              ["AST",                   "register-lft-ast"],
+              ["ALT",                   "register-lft-alt"],
+              ["ALP",                   "register-lft-alp"],
+            ] as const).map(([lbl, inputId]) => {
               const stateKey = lbl === "Total Protein"         ? [lftTotalProtein,     setLftTotalProtein]
                 : lbl === "Albumin"               ? [lftAlbumin,          setLftAlbumin]
                 : lbl === "Total Bilirubin (TB)"  ? [lftTotalBilirubin,   setLftTotalBilirubin]
@@ -4706,11 +4708,11 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
                 :                                   [lftAlp,              setLftAlp];
               const [val, setter] = stateKey as [string, (v: string) => void];
               return (
-                <div key={lbl} className="min-w-0">
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{lbl}</label>
-                  <input type="number" step="any" min="0" value={val}
+                <div key={lbl} className="min-w-0 flex flex-col">
+                  <label htmlFor={inputId} className="block min-h-[2rem] text-[10px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 leading-tight">{lbl}</label>
+                  <input id={inputId} type="number" step="any" min="0" value={val}
                     onChange={e => setter(e.target.value)} placeholder="—"
-                    className="w-full min-w-0 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
+                    className="mt-auto w-full min-w-0 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white" />
                 </div>
               );
             })}
@@ -4722,10 +4724,10 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">
         <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-3">Viral Panel</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {([["HBsAg (Hep B)", hbsAg, setHbsAg], ["Anti HCV", hcv, setHcv], ["HIV I/II", hiv, setHiv]] as const).map(([lbl, val, setter]) => (
+          {([["HBsAg (Hep B)", hbsAg, setHbsAg, "register-viral-hbsag"], ["Anti HCV", hcv, setHcv, "register-viral-hcv"], ["HIV I/II", hiv, setHiv, "register-viral-hiv"]] as const).map(([lbl, val, setter, inputId]) => (
             <div key={lbl}>
-              <label className={labelCls}>{lbl} *</label>
-              <select value={val} onChange={e => setter(e.target.value)} className={fldCls(false)}>
+              <label htmlFor={inputId} className={labelCls}>{lbl} *</label>
+              <select id={inputId} value={val} onChange={e => setter(e.target.value)} className={fldCls(false)}>
                 <option value="Negative">Negative</option>
                 <option value="Positive">Positive</option>
                 <option value="Unknown">Unknown</option>

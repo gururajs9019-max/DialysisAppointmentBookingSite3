@@ -10,7 +10,7 @@ const groups: { title: string; fields: [string,string][] }[] = [
     ["treatingNephrologist","Treating Nephrologist"],["insurance","Insurance"],["remarks","Remarks"],
   ] },
   { title: "Medical Information", fields: [
-    ["comorbidities","Comorbidities"],["medicalInfo.hypertension","Hypertension"],["medicalInfo.diabetes","Diabetes"],
+    ["medicalInfo.dryWeight","Dry Weight (kg)"],["medicalInfo.weightGain","Weight Gain (kg)"],
     ["medicalInfo.avFistula","AV Fistula"],["medicalInfo.permacath","Permacath (Tunnelled)"],
     ["medicalInfo.temporaryCatheter","Temporary Catheter"],["medicalInfo.opdIpd","OPD / IPD"],
   ] },
@@ -26,11 +26,29 @@ const groups: { title: string; fields: [string,string][] }[] = [
   ] },
 ];
 const fields = groups.flatMap(g=>g.fields);
+const comorbidityOptions = [["hypertension","Hypertension"],["diabetes","Diabetes"],["others","Others"]] as const;
+const weightFields = new Set(["medicalInfo.dryWeight","medicalInfo.weightGain"]);
+type ComorbidityFlags = Record<typeof comorbidityOptions[number][0],boolean>;
+function existingComorbidityFlags(patient: Patient): ComorbidityFlags {
+  const medical = patient.medicalInfo || {};
+  const saved = medical.comorbidityFlags as Partial<ComorbidityFlags> | undefined;
+  const conditions = (patient.comorbidities || "").split(",").map(value=>value.trim()).filter(Boolean);
+  const recorded = (value: unknown): boolean => {
+    if (value && typeof value === "object") return Object.values(value).some(recorded);
+    return value !== null && value !== undefined && !["","no","none","false","0"].includes(String(value).trim().toLowerCase());
+  };
+  return Object.fromEntries(comorbidityOptions.map(([key])=>[key,
+    typeof saved?.[key] === "boolean" ? saved[key] :
+      key === "others"
+        ? conditions.some(value=>!(/hypertension|diabetes/i).test(value) && !["none","no"].includes(value.toLowerCase())) || recorded(medical.otherComorbidities)
+        : conditions.some(value=>value.toLowerCase().includes(key)) || recorded(medical[key]),
+  ])) as ComorbidityFlags;
+}
 function getValue(patient: Patient, path: string): string {
   const value=path.split(".").reduce<any>((obj,key)=>obj?.[key],patient);
   return value === null || value === undefined ? "" : String(value);
 }
-function putValue(object: Record<string,any>, path: string, value: string) {
+function putValue(object: Record<string,any>, path: string, value: string | number) {
   const parts=path.split(".");let current=object;
   parts.slice(0,-1).forEach(key=>{current[key] ||= {};current=current[key];});
   current[parts.at(-1)!]=value;
@@ -40,12 +58,32 @@ export function PatientClinicalEditor({ patient, onSaved, onClose }: {
   patient: Patient; onSaved: (patient: Patient)=>void; onClose: ()=>void;
 }) {
   const [draft,setDraft]=useState(()=>Object.fromEntries(fields.map(([path])=>[path,getValue(patient,path)])));
+  const [comorbidityFlags,setComorbidityFlags]=useState(()=>existingComorbidityFlags(patient));
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState<string|null>(null);
   const save=async(event:React.FormEvent)=>{
     event.preventDefault();if(saving)return;
     const changes: Record<string,any>={};
-    fields.forEach(([path])=>{if(draft[path]!==getValue(patient,path))putValue(changes,path,draft[path]);});
+    for (const [path,label] of fields) {
+      if(weightFields.has(path) && draft[path]!==getValue(patient,path) && draft[path] !== "" &&
+        (!Number.isFinite(Number(draft[path])) || Number(draft[path]) < 0 || (path==="medicalInfo.dryWeight" && Number(draft[path])===0))) {
+        setError(`${label} must be ${path==="medicalInfo.dryWeight"?"greater than 0":"at least 0"}.`);return;
+      }
+      if(draft[path]!==getValue(patient,path))
+        putValue(changes,path,weightFields.has(path) && draft[path]!=="" ? Number(draft[path]) : draft[path]);
+    }
+    const originalFlags=existingComorbidityFlags(patient);
+    if(comorbidityOptions.some(([key])=>comorbidityFlags[key]!==originalFlags[key])) {
+      changes.medicalInfo ||= {};
+      changes.medicalInfo.comorbidityFlags={...comorbidityFlags};
+      // Preserve named historical conditions and legacy readings; only the
+      // three checkbox labels are replaced by the current selections.
+      const legacy=(patient.comorbidities || "").split(",").map(value=>value.trim()).filter(value=>
+        value && !comorbidityOptions.some(([,label])=>label.toLowerCase()===value.toLowerCase()));
+      const selected=comorbidityOptions.filter(([key])=>comorbidityFlags[key] && !legacy.some(value=>
+        key==="others" ? !(/hypertension|diabetes/i).test(value) : value.toLowerCase().includes(key)));
+      changes.comorbidities=[...legacy,...selected.map(([,label])=>label)].join(", ");
+    }
     if(!Object.keys(changes).length){onClose();return;}
     if(Object.keys(changes.medicalInfo||{}).some(key=>["avFistula","permacath","temporaryCatheter"].includes(key))) {
       changes.medicalInfo.dialysisAccess=[["avFistula","AVF"],["permacath","Permacath"],["temporaryCatheter","Temp Catheter"]]
@@ -66,9 +104,20 @@ export function PatientClinicalEditor({ patient, onSaved, onClose }: {
       <form onSubmit={save} className="overflow-y-auto p-6 space-y-6">
         {groups.map(group=><fieldset key={group.title}>
           <legend className="text-sm font-bold text-slate-700 mb-3">{group.title}</legend>
+          {group.title==="Medical Information" && <div className="mb-4">
+            <p className="text-xs text-slate-600 font-semibold mb-2">Comorbidities</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {comorbidityOptions.map(([key,label])=><label key={key} className="flex items-center gap-2 p-2.5 border border-slate-200 rounded-xl text-sm text-slate-700">
+                <input type="checkbox" checked={comorbidityFlags[key]} onChange={event=>setComorbidityFlags(previous=>({...previous,[key]:event.target.checked}))}
+                  className="h-4 w-4 accent-violet-600" />{label}
+              </label>)}
+            </div>
+          </div>}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {group.fields.map(([path,label])=><label key={path} className="text-xs text-slate-600 font-semibold">{label}
-              <input type={path==="dateOfBirth"?"date":"text"} required={path==="name"} value={draft[path]}
+              <input type={path==="dateOfBirth"?"date":weightFields.has(path)?"number":"text"}
+                min={weightFields.has(path)?0:undefined} step={weightFields.has(path)?"any":undefined}
+                inputMode={weightFields.has(path)?"decimal":undefined} required={path==="name"} value={draft[path]}
                 onChange={e=>setDraft(prev=>({...prev,[path]:e.target.value}))}
                 className="mt-1 w-full p-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-300" />
             </label>)}
