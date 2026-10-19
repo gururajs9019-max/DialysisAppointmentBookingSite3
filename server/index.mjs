@@ -8,6 +8,7 @@ import { staffServices } from "./staff-services.mjs";
 import { validateSessionLinks } from "./session-clinical-links.mjs";
 import { withRequestErrorBoundary } from "./request-error-boundary.mjs";
 import { apiErrorResponse, httpError } from "./api-errors.mjs";
+import { readJson } from "./request-body.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -42,11 +43,6 @@ function dateOnly(value, field) {
 function object(value, field = "payload") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw httpError(400, `${field} must be an object.`);
   return value;
-}
-async function readJson(req) {
-  let body = ""; for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) throw httpError(413, "Request body is too large."); }
-  if (!body) return {};
-  try { return JSON.parse(body); } catch { throw httpError(400, "Request body must be valid JSON."); }
 }
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   return `${salt}:${pbkdf2Sync(password, salt, 210_000, 32, "sha256").toString("hex")}`;
@@ -507,7 +503,9 @@ export async function api(req, res, url) {
     if (path.startsWith("/api/")) { sendJson(res,404,{error:"API route not found"}); return true; } return false;
   } catch (error) {
     const { status, body } = apiErrorResponse(error);
-    sendJson(res, status, body);
+    if (req.aborted || res.destroyed || res.writableEnded) return true;
+    // Stop rejected uploads without destroying the socket before the response.
+    sendJson(res, status, body, status === 413 ? { Connection: "close" } : {});
     return true;
   }
 }

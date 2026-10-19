@@ -205,6 +205,11 @@ try {
   console.log("production file-link containment regressions passed");
   console.log("production static-file regressions passed");
   if (!staticOnly) {
+    const beforeBodyChecks = stderr.length;
+    await runProductionIntegration(baseUrl, "server/request-body.test.mjs");
+    assert.equal(child.pid, originalPid, "body failures must not require a replacement process");
+    assert.equal(child.exitCode, null, "body failures must not terminate the production process");
+    assert.doesNotMatch(stderr.slice(beforeBodyChecks), /Unexpected API failure|Unexpected request handler failure|ERR_HTTP_HEADERS_SENT|private-request-body-marker/);
     await runProductionIntegration(baseUrl);
     await runProductionIntegration(baseUrl, "server/prescription-concurrency.test.mjs");
     await runProductionIntegration(baseUrl, "server/staff-gaps.test.mjs");

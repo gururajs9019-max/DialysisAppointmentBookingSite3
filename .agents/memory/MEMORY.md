@@ -8,3 +8,4 @@
 - [Publish foreign-key dependencies](publish-schema-dependencies.md) — Check actual diff ordering; development-only indexes may not be carried into Publish migrations.
 - [Prescription record safety](prescription-record-safety.md) — New prescriptions remain separate records; retry deduplication must not block legitimate repeat prescriptions.
 - [Error diagnostic privacy](error-diagnostic-privacy.md) — Preserve clinical/account privacy during troubleshooting; do not restore full exception dumps to debug publishing.
+- [HTTP upload safety](http-upload-safety.md) — Test byte limits over real TCP; default stream iteration can close a socket before its error reply.

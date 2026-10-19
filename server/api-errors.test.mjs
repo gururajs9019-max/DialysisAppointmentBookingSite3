@@ -74,7 +74,7 @@ console.error = (...args) => { logs.push(args); renderedLogs.push(format(...args
 const server = createServer(withRequestErrorBoundary(async (req, res) => {
   const faultKey = req.headers["x-test-fault"];
   if (faults.has(faultKey)) {
-    req[Symbol.asyncIterator] = async function* () {
+    req.iterator = async function* () {
       yield Buffer.from(JSON.stringify(markers));
       throw faults.get(faultKey);
     };
