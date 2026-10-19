@@ -135,7 +135,7 @@ ALTER TABLE patients ADD CONSTRAINT patients_lifecycle_check CHECK
   (lifecycle IN ('Active','Transplanted','Expired','Shifted','Discontinued','Temporarily inactive','Transferred','Screening ended'));
 
 -- Unassigned historical sessions remain valid. Explicit clinical links are
--- validated by the API throughout the staged Publish migration.
+-- validated by both the API and database constraints.
 ALTER TABLE dialysis_sessions DROP CONSTRAINT IF EXISTS dialysis_sessions_status_check;
 ALTER TABLE dialysis_sessions ADD CONSTRAINT dialysis_sessions_status_check CHECK
   (status IN ('scheduled','waiting','called','running','completed','missed','cancelled'));
@@ -152,7 +152,12 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- Publish phase 1: publish the referenced UNIQUE constraint before restoring
--- the composite FK in phase 2. This drops only the development FK when this
--- development-only schema setup is run; no records are deleted.
-ALTER TABLE dialysis_sessions DROP CONSTRAINT IF EXISTS session_patient_prescription;
+-- The referenced UNIQUE constraint must be created first for Publish to apply
+-- this composite FK successfully. Preserve historical unassigned sessions.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='dialysis_sessions'::regclass
+    AND conname='session_patient_prescription') THEN
+    ALTER TABLE dialysis_sessions ADD CONSTRAINT session_patient_prescription
+      FOREIGN KEY (prescription_id,patient_id) REFERENCES prescriptions(id,patient_id);
+  END IF;
+END $$;

@@ -55,12 +55,10 @@ try {
   const attachUnique = "ALTER TABLE prescriptions ADD CONSTRAINT prescriptions_id_patient\n      UNIQUE USING INDEX prescriptions_id_patient;";
   assert.ok(schemaSql.includes(attachUnique));
   await client.query(schemaSql.replace(attachUnique, "NULL;"));
-  await client.query(`ALTER TABLE dialysis_sessions ADD CONSTRAINT session_patient_prescription
-    FOREIGN KEY (prescription_id,patient_id) REFERENCES prescriptions(id,patient_id)`);
   const originalIndex = (await client.query(`SELECT indexrelid FROM pg_index
     WHERE indexrelid='prescriptions_id_patient'::regclass`)).rows[0].indexrelid;
-  // Applying twice preserves the referenced index and deliberately removes
-  // only the composite FK for the approved first publishing stage.
+  // Applying twice preserves the referenced index and restores the composite
+  // FK after the prerequisite UNIQUE constraint is added.
   await client.query(schemaSql);
   await client.query(schemaSql);
   const uniqueKey = (await client.query(`SELECT contype,convalidated,conindid,pg_get_constraintdef(oid) definition
@@ -69,9 +67,12 @@ try {
   assert.equal(uniqueKey.convalidated, true);
   assert.equal(uniqueKey.conindid, originalIndex, "upgrading preserves the existing unique index");
   assert.equal(uniqueKey.definition, "UNIQUE (id, patient_id)");
-  assert.equal((await client.query(`SELECT oid FROM pg_constraint
-    WHERE conrelid='dialysis_sessions'::regclass AND conname='session_patient_prescription'`)).rowCount,
-  0, "the approved first publishing stage defers the composite FK");
+  const sessionLink = (await client.query(`SELECT contype,convalidated,pg_get_constraintdef(oid) definition
+    FROM pg_constraint WHERE conrelid='dialysis_sessions'::regclass AND conname='session_patient_prescription'`)).rows[0];
+  assert.equal(sessionLink.contype, "f");
+  assert.equal(sessionLink.convalidated, true);
+  assert.equal(sessionLink.definition,
+    "FOREIGN KEY (prescription_id, patient_id) REFERENCES prescriptions(id, patient_id)");
 
   const tables = await client.query(
     "SELECT tablename FROM pg_tables WHERE schemaname=$1 ORDER BY tablename",
