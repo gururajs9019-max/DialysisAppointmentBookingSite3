@@ -262,6 +262,7 @@ export default function DoctorApp({
           <DoctorPrescription
             onDraftStateChange={onDraftStateChange}
             onNavigate={handleNavigate}
+            patients={patients}
             prescriptions={prescriptions}
             setPrescriptions={setPrescriptions}
             doctorName={currentDoctor?.name ?? ""}

@@ -124,6 +124,7 @@ export function DoctorPrescriptionCreateForm({
     }
 
     const payload: DoctorPrescriptionCreatePayload = {
+      medicationOrders: true,
       patientId,
       prescriptionDate,
       diagnosis: diagnosis.trim(),
@@ -339,7 +340,7 @@ export function DoctorPrescriptionCreateForm({
                             {label}{required && <span className="text-red-600"> *</span>}
                           </label>
                           <input id={`medicine-${index}-${field}`} required={required}
-                            value={medication[field]} maxLength={field === "instructions" ? 2000 : 300}
+                            value={medication[field]} maxLength={field === "instructions" ? 2000 : field === "name" ? 300 : ["route", "quantity"].includes(field) ? 100 : 200}
                             onChange={event => updateMedication(index, field, event.target.value)}
                             placeholder={label} className={inputClass} />
                         </div>

@@ -1,13 +1,15 @@
 import React, { useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
-import type { AdminPrescription, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
+import type { AdminPrescription, Patient, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
 import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, computeChangedFields, formatRxTimestamp } from "../../AdminApp";
-import { updatePrescription, PrescriptionConflictError } from "../../lib/staffApi";
+import { updatePrescription, PrescriptionConflictError, type DoctorPrescriptionCreatePayload, type PrescriptionMedicationDetails } from "../../lib/staffApi";
 import { PrescriptionConflict } from "../PrescriptionConflict";
 import { usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
+import { DoctorPrescriptionCreateForm } from "./DoctorPrescriptionCreateForm";
 
 interface DoctorPrescriptionProps {
   onNavigate: (view: string) => void;
+  patients: Patient[];
   prescriptions: AdminPrescription[];
   setPrescriptions: React.Dispatch<React.SetStateAction<AdminPrescription[]>>;
   doctorName: string;
@@ -35,10 +37,13 @@ function StatusBadge({ status }: { status: AdminPrescription["status"] }) {
   return <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${map[status]}`}>{status}</span>;
 }
 
-export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, setPrescriptions, doctorName, addRxNotification, onDraftStateChange }: DoctorPrescriptionProps) {
+type PrescriptionDetails = AdminPrescription & Partial<Omit<DoctorPrescriptionCreatePayload, "patientId" | "medications">>;
+
+export function DoctorPrescription({ onNavigate: _onNavigate, patients, prescriptions, setPrescriptions, doctorName, addRxNotification, onDraftStateChange }: DoctorPrescriptionProps) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(prescriptions[0]?.id ?? null);
   const [showNew, setShowNew] = useState(false);
+  const [creationSuccess, setCreationSuccess] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [showHistoryFor, setShowHistoryFor] = useState<string | null>(null);
@@ -49,8 +54,15 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
 
   const filtered = prescriptions.filter(rx =>
     rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
-    rx.patientUhid.toLowerCase().includes(search.toLowerCase())
-  );
+    rx.patientUhid.toLowerCase().includes(search.toLowerCase()) ||
+    rx.patientId.toLowerCase().includes(search.toLowerCase())
+  ).sort((a, b) => (b.createdAt || b.issuedDate).localeCompare(a.createdAt || a.issuedDate));
+
+  function startCreate() {
+    if (!draftGuard.confirmDiscard()) return;
+    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null);
+    setCreationSuccess(false); setShowNew(true);
+  }
 
   function startEdit(rx: AdminPrescription) {
     if (!draftGuard.confirmDiscard()) return;
@@ -143,29 +155,35 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
           />
         </div>
         <button
-          onClick={() => setShowNew(s => !s)}
+          onClick={startCreate}
+          disabled={showNew || savingRx}
           className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-semibold text-sm shadow-md shadow-blue-200 shrink-0"
         >
-          <Plus className="w-4 h-4" /> New Prescription
+          <Plus className="w-4 h-4" /> Create Prescription
         </button>
       </div>
 
+      {creationSuccess && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+        Prescription created successfully.
+      </p>}
+
       {showNew && (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 flex gap-3 items-start">
-          <FileText className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold text-blue-900 mb-1">Create New Prescription</p>
-            <p className="text-sm text-blue-700">New prescriptions are created by the Administrator. Use the Edit Prescription button below to update an existing prescription.</p>
-          </div>
-          <button onClick={() => setShowNew(false)} className="ml-auto shrink-0 text-blue-400 hover:text-blue-700">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <DoctorPrescriptionCreateForm patients={patients} prescriptions={prescriptions}
+          onDraftStateChange={onDraftStateChange}
+          onCancel={() => setShowNew(false)}
+          onCreated={saved => {
+            setPrescriptions(previous => [saved, ...previous.filter(prescription => prescription.id !== saved.id)]);
+            setExpanded(saved.id); setSearch(""); setShowNew(false); setCreationSuccess(true);
+          }}
+          onViewExisting={prescription => {
+            setShowNew(false); setSearch(prescription.patientUhid); setExpanded(prescription.id);
+          }} />
       )}
 
       {/* Prescription cards */}
-      <div className="space-y-4">
+      {!showNew && <div className="space-y-4">
         {filtered.map(rx => {
+          const details = rx as PrescriptionDetails;
           const isExpanded = expanded === rx.id;
           const isEditing  = editingId === rx.id;
           const draft      = isEditing ? editDraft! : null;
@@ -195,7 +213,8 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                         )}
                       </div>
                       <p className="text-xs text-slate-500">
-                        {rx.patientUhid} · {rx.lastUpdatedAt ? formatRxTimestamp(rx.lastUpdatedAt) : rx.issuedDate} · {rx.updatedBy} <span className="text-slate-400">({rx.updatedByRole})</span>
+                         {rx.patientUhid} · {details.prescriptionDate || (rx.createdAt ? formatRxTimestamp(rx.createdAt) : rx.issuedDate)}
+                         {" · "}Prescribed by {rx.createdBy || rx.updatedBy} <span className="text-slate-400">({rx.createdByRole || rx.updatedByRole})</span>
                       </p>
                       <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{rx.diagnosis}</p>
                     </div>
@@ -320,10 +339,8 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
                                   </td>
                                   <td className="px-1 py-1">
-                                    <select value={med.route} onChange={e => updateMed(i, "route", e.target.value)}
-                                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white">
-                                      <option>PO</option><option>IV</option><option>SC</option><option>IM</option>
-                                    </select>
+                                    <input value={med.route} onChange={e => updateMed(i, "route", e.target.value)} placeholder="Route"
+                                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white" />
                                   </td>
                                   <td className="px-1 py-1">
                                     <button onClick={() => removeMedRow(i)} className="flex justify-center text-red-400 hover:text-red-600 p-1.5">
@@ -353,7 +370,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                   ) : (
                     /* ── VIEW MODE ── */
                     <div>
-                      <div className="mt-4 mb-5">
+                      {(RX_SCALAR_FIELDS.some(({ key }) => rx.dialysisRx[key]) || rx.dialysisRx.dialysisDays.length > 0) && <div className="mt-4 mb-5">
                         <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-2">
                           <Clock className="w-3.5 h-3.5 text-blue-600" /> Dialysis Prescription
                         </h3>
@@ -373,6 +390,21 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                             </div>
                           </div>
                         </div>
+                      </div>}
+
+                      <div className="my-4 grid gap-3 sm:grid-cols-2">
+                        {([
+                          ["Symptoms / clinical notes", details.symptoms],
+                          ["Investigation findings", details.investigationFindings],
+                          ["Doctor's advice", details.advice],
+                          ["Dietary advice", details.dietaryAdvice],
+                          ["Follow-up date", details.followUpDate],
+                        ] as const).filter(([, value]) => value).map(([label, value]) => (
+                          <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                            <p className="text-xs font-bold text-slate-500">{label}</p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value}</p>
+                          </div>
+                        ))}
                       </div>
 
                       <div className="mb-5">
@@ -390,9 +422,17 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                               </tr>
                             </thead>
                             <tbody>
-                              {rx.medications.map((med, i) => (
+                              {rx.medications.map((med, i) => {
+                                const medication = med as Partial<PrescriptionMedicationDetails> & RxMedication;
+                                return (
                                 <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50">
-                                  <td className="px-3 py-2.5 font-semibold text-slate-800">{med.name}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-slate-800">
+                                    {med.name}
+                                    {medication.strength && <span className="block text-xs font-normal text-slate-500">Strength: {medication.strength}</span>}
+                                    {medication.duration && <span className="block text-xs font-normal text-slate-500">Duration: {medication.duration}</span>}
+                                    {medication.quantity && <span className="block text-xs font-normal text-slate-500">Quantity: {medication.quantity}</span>}
+                                    {medication.instructions && <span className="block whitespace-pre-wrap text-xs font-normal text-slate-500">Instructions: {medication.instructions}</span>}
+                                  </td>
                                   <td className="px-3 py-2.5 text-slate-600">{med.dose}</td>
                                   <td className="px-3 py-2.5 text-slate-600">{med.frequency}</td>
                                   <td className="px-3 py-2.5">
@@ -403,7 +443,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
                                     }`}>{med.route}</span>
                                   </td>
                                 </tr>
-                              ))}
+                              );})}
                             </tbody>
                           </table>
                         </div>
@@ -512,7 +552,7 @@ export function DoctorPrescription({ onNavigate: _onNavigate, prescriptions, set
             <p className="text-slate-400 text-sm mt-1">Try adjusting your search query.</p>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Summary */}
       <div className="grid grid-cols-3 gap-4">

@@ -35,6 +35,7 @@ export interface PrescriptionMedicationDetails extends RxMedication {
 }
 
 export interface DoctorPrescriptionCreatePayload {
+  medicationOrders: true;
   patientId: string;
   prescriptionDate: string;
   diagnosis: string;
@@ -167,13 +168,12 @@ function asMedications(value: unknown): RxMedication[] {
     .filter((med): med is Record<string, unknown> => Boolean(med) && typeof med === "object" && !Array.isArray(med))
     .map(med => ({
       name: asText(med.name),
-      strength: asText(med.strength),
       dose: asText(med.dose),
       frequency: asText(med.frequency),
       route: asText(med.route),
-      duration: asText(med.duration),
-      quantity: asText(med.quantity),
-      instructions: asText(med.instructions),
+      ...Object.fromEntries(["strength", "duration", "quantity", "instructions"]
+        .filter(key => typeof med[key] === "string" && med[key])
+        .map(key => [key, med[key]])),
     })) as RxMedication[];
 }
 

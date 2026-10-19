@@ -377,6 +377,9 @@ async function api(req, res, url) {
 
       const requestId = text(input.requestId, "requestId", { max: 200 }) || randomUUID();
       if (!/^[A-Za-z0-9_-]{8,200}$/.test(requestId)) throw httpError(400, "Invalid requestId.");
+      if (input.medicationOrders !== undefined && typeof input.medicationOrders !== "boolean") {
+        throw httpError(400, "medicationOrders must be boolean.");
+      }
       const medications = [];
       if (input.medications !== undefined) {
         if (!Array.isArray(input.medications) || input.medications.length > 100) {
@@ -401,6 +404,7 @@ async function api(req, res, url) {
       }
 
       const prescriptionData = {
+        medicationOrders: input.medicationOrders === true,
         patientId: patient.id,
         prescriptionDate: dateOnly(input.prescriptionDate, "prescriptionDate") || "",
         diagnosis: text(input.diagnosis, "diagnosis", { max: 2000 }) || "",
@@ -414,6 +418,11 @@ async function api(req, res, url) {
         notes: text(input.notes, "notes", { max: 10000 }) || "",
         status: "Active",
       };
+      if (prescriptionData.medicationOrders) {
+        if (!prescriptionData.prescriptionDate) throw httpError(400, "A prescription date is required.");
+        if (!prescriptionData.diagnosis) throw httpError(400, "A diagnosis is required.");
+        if (!medications.length) throw httpError(400, "At least one medicine is required for medication orders.");
+      }
 
       const result = await transaction(async client => {
         const inserted = await client.query(

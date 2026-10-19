@@ -71,6 +71,7 @@ try {
   await runProductionIntegration(`http://127.0.0.1:${port}`, "server/prescription-concurrency.test.mjs");
   await runProductionIntegration(`http://127.0.0.1:${port}`, "server/staff-gaps.test.mjs");
   await runProductionIntegration(`http://127.0.0.1:${port}`, "server/staff-backend-gaps.test.mjs");
+  await runProductionIntegration(`http://127.0.0.1:${port}`, "server/prescription-creation.test.mjs");
   console.log("production server smoke test passed");
 } finally {
   if (child && child.exitCode === null) {
