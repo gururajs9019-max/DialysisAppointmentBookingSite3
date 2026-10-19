@@ -2574,12 +2574,17 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
 
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const todaySessions = sessions.filter(s => s.date === "Today" || s.date === today);
-  const scheduled = todaySessions.filter(s => s.status === "Scheduled");
-  const running   = todaySessions.filter(s => s.status === "Running");
-  const waiting   = todaySessions.filter(s => s.status === "Waiting");
-  const completed = todaySessions.filter(s => s.status === "Completed");
-  const selected  = sessions.find(s => s.id === selectedId) ?? null;
+  const [selectedDate, setSelectedDate] = useState(today);
+  const dateSessions = sessions.filter(s =>
+    s.date === selectedDate || (selectedDate === today && s.date === "Today")
+  );
+  const scheduled = dateSessions.filter(s => s.status === "Scheduled");
+  const running   = dateSessions.filter(s => s.status === "Running");
+  const waiting   = dateSessions.filter(s => s.status === "Waiting");
+  const completed = dateSessions.filter(s => s.status === "Completed");
+  const missed    = dateSessions.filter(s => s.status === "Missed");
+  const cancelled = dateSessions.filter(s => s.status === "Cancelled");
+  const selected  = dateSessions.find(s => s.id === selectedId) ?? null;
   const canEdit   = selected !== null;
 
   const openSession = (s: DialysisSession) => {
@@ -2646,14 +2651,30 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <SectionHeader title="Live Dialysis Schedule" subtitle="Today's sessions — click a card to view or enter session details" />
+      <SectionHeader title="Live Dialysis Schedule" subtitle="Choose a date to view sessions, record outcomes, or enter session details" />
+      <div className="flex flex-wrap items-center gap-3 bg-white rounded-2xl border border-slate-100 p-4">
+        <label htmlFor="schedule-date" className="text-sm font-semibold text-slate-700">Schedule date</label>
+        <input
+          id="schedule-date"
+          type="date"
+          value={selectedDate}
+          onChange={event => {
+            setSelectedDate(event.target.value);
+            setSelectedId(null);
+          }}
+          className="px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white"
+        />
+        {selectedDate === today && (
+          <span className="text-xs font-semibold text-violet-700 bg-violet-50 px-2.5 py-1 rounded-full">Today</span>
+        )}
+      </div>
       <div className="grid lg:grid-cols-5 gap-6">
         {/* Card list */}
         <div className="lg:col-span-2 space-y-5">
-          {todaySessions.length === 0 && (
+          {dateSessions.length === 0 && (
             <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center">
               <Activity className="w-10 h-10 text-slate-200 mx-auto mb-2" />
-              <p className="text-slate-400 text-sm">No sessions scheduled for today.</p>
+              <p className="text-slate-400 text-sm">No sessions scheduled for this date.</p>
             </div>
           )}
           {running.length > 0 && (
@@ -2680,6 +2701,18 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
             <div>
               <p className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2">Completed ({completed.length})</p>
               <div className="space-y-2">{completed.map(renderCard)}</div>
+            </div>
+          )}
+          {missed.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">Missed ({missed.length})</p>
+              <div className="space-y-2">{missed.map(renderCard)}</div>
+            </div>
+          )}
+          {cancelled.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cancelled ({cancelled.length})</p>
+              <div className="space-y-2">{cancelled.map(renderCard)}</div>
             </div>
           )}
         </div>
