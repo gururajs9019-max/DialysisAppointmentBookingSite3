@@ -517,19 +517,36 @@ async function start() {
       res.end("Not found");
       return;
     }
+    const contentTypes = {
+      ".css": "text/css; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".svg": "image/svg+xml",
+    };
+    const isMissingFile = error => ["ENOENT", "ENOTDIR", "EISDIR"].includes(error.code);
+    const isAppRoute = !extname(pathname) && pathname !== "/assets" && !pathname.startsWith("/assets/");
+    let filePath = requestedPath;
+    let content;
     try {
-      const contentTypes = {
-        ".css": "text/css; charset=utf-8",
-        ".html": "text/html; charset=utf-8",
-        ".js": "text/javascript; charset=utf-8",
-        ".svg": "image/svg+xml",
-      };
-      res.writeHead(200, { "Content-Type": contentTypes[extname(requestedPath)] || "application/octet-stream" });
-      res.end(await readFile(requestedPath));
-    } catch {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(await readFile(join(distRoot, "index.html")));
+      try {
+        content = await readFile(filePath);
+      } catch (error) {
+        if (!isMissingFile(error) || !isAppRoute || pathname === "/") throw error;
+        filePath = join(distRoot, "index.html");
+        content = await readFile(filePath);
+      }
+    } catch (error) {
+      // Missing assets are not app routes. An unavailable app shell or another
+      // read failure is a server error, and must not trigger a second response.
+      const status = isMissingFile(error) && !isAppRoute && filePath !== join(distRoot, "index.html") ? 404 : 500;
+      if (status === 500) console.error("Production asset error:", error);
+      res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(status === 404 ? "Not found" : "Unable to load application");
+      return;
     }
+    // Reading (including any SPA fallback) must finish before committing headers.
+    res.writeHead(200, { "Content-Type": contentTypes[extname(filePath)] || "application/octet-stream" });
+    res.end(content);
   }
 
   let vite;
