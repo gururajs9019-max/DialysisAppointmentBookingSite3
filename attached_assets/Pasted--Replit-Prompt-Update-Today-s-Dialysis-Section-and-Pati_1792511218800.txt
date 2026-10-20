@@ -1,0 +1,171 @@
+# Replit Prompt: Update Today's Dialysis Section and Patient Appointment Management
+
+I am building an existing Dialysis Slot Manager application with three portals: Administrator, Doctor, and Patient.
+
+Implement the following changes specifically in the **Administrator Portal → Dashboard → Today's Dialysis** section.
+
+**Important:** First inspect the existing code, database schema, scheduling logic, and patient assignment workflow. Modify the existing implementation rather than rebuilding the application.
+
+## 1. Display Assignment Status in Today's Dialysis
+
+In the Administrator Dashboard, inside the Today's Dialysis patient list, check whether each patient has a dialysis appointment assigned for the current date.
+
+### If the patient is already assigned:
+- Display a clear **"Assigned"** status badge beside the patient's name or in the status column.
+- Do not show the normal Assign button for an appointment that is already assigned.
+- Display the patient's actual assigned unit, machine, and time slot wherever appropriate in the existing layout.
+- Ensure the status is retrieved from the database, not hardcoded.
+- The status must remain correct after refreshing the page or navigating away and returning.
+
+### If the patient is not assigned:
+- Display an **"Unassigned"** status.
+- Provide the Assign option.
+- Allow the administrator to assign the patient using the existing scheduling workflow.
+
+Determine the assignment status using the actual appointment record for the current date. Do not rely solely on frontend state.
+
+## 2. Clicking a Patient's Name
+
+When the administrator clicks a patient's name in the Today's Dialysis section, open a patient appointment details panel, modal, or page using the existing application's design.
+
+Display the relevant information:
+- Patient name and patient ID
+- Dialysis appointment date
+- Assignment status
+- Assigned unit
+- Assigned machine
+- Assigned time slot
+
+If the patient has an appointment for today, provide these two actions:
+
+**A. Reschedule Appointment**
+- Open an edit/rescheduling form.
+- Allow the administrator to select an available unit, machine, and time slot.
+- Keep the appointment date set to today's date by default.
+- Allow the administrator to change the slot or machine according to existing scheduling rules.
+- Validate machine availability and prevent conflicting bookings.
+- Save the changes to the existing appointment record.
+- Update the dashboard immediately after successful saving.
+- Do not create a duplicate appointment when rescheduling an existing appointment.
+
+**B. Cancel Appointment**
+- Show a confirmation dialog before cancellation.
+- Display a message such as: "Are you sure you want to cancel this dialysis appointment for [Patient Name]?"
+- Provide Cancel and Confirm Cancellation buttons.
+- When confirmed, update the appointment's status to Cancelled in the database.
+- Update the dashboard immediately.
+- Make the slot available for another eligible patient if no other booking or operational constraint prevents it.
+- Preserve the patient's medical history and appointment record for auditing.
+- Do not permanently delete the patient or historical appointment data.
+
+If the patient is unassigned, clicking their name may display patient details and the Assign option, but do not show appointment-specific Reschedule or Cancel actions unless an appointment exists.
+
+## 3. Automatically Set the Appointment Date to Today
+
+When the administrator clicks Assign for a patient inside Today's Dialysis, the appointment date must automatically default to the current date.
+
+Requirements:
+- Automatically populate the date with today's date.
+- Use the application's configured local timezone for determining the current date.
+- Do not require the administrator to manually select today's date again.
+- Keep the date field read-only or hidden in this specific Today's Dialysis assignment flow, since the appointment is intended for today.
+- Continue to store the correct date in the database.
+- Ensure the date does not shift to the previous or next day because of UTC/timezone conversion.
+- When the administrator reschedules from Today's Dialysis, default the date to today as well.
+
+**Scope:** Apply this automatic-date behavior to the assignment and rescheduling workflows opened from Today's Dialysis. Do not remove the ability to schedule future appointments in other parts of the application.
+
+## 4. Remove the Treating Doctor Section from Assignment
+
+In the assignment form opened from Administrator Dashboard → Today's Dialysis, remove the **Treating Doctor** field/section entirely.
+
+Requirements:
+- Do not display the Treating Doctor dropdown or input.
+- Remove its validation requirement from this specific assignment form.
+- Do not prevent assignment because a treating doctor has not been selected.
+- Continue to collect the required scheduling details, such as unit, machine, and time slot.
+- Do not delete existing treating-doctor information from patient records or the database.
+- Do not remove the Treating Doctor field from the patient registration form or unrelated medical-information screens.
+- If the existing backend requires a doctor reference, inspect the current schema and safely adapt the assignment flow without inventing a doctor or breaking existing records.
+
+## 5. Preserve Scheduling and Machine Rules
+
+Keep the existing dialysis scheduling rules intact.
+
+The application has two units:
+- Unit 1: 29 machines.
+- Unit 2: 7 machines.
+
+Available time slots:
+- 8 AM–12 PM
+- 12 PM–4 PM
+- 4 PM–8 PM
+
+Use the actual machine records stored in the database.
+
+When assigning or rescheduling:
+- Only show eligible machines in the selected unit.
+- Do not allow a machine that is disabled or under maintenance to be assigned.
+- Prevent conflicting bookings for the same machine, date, and time slot.
+- Preserve any existing machine compatibility rules based on patient viral status.
+- Ensure cancelled appointments do not continue to occupy a slot.
+- Do not overwrite another patient's appointment.
+- Prevent duplicate appointments for the same patient and slot.
+
+Validate conflicts on the backend/database as well as in the frontend.
+
+## 6. Database and UI Synchronization
+
+Use the existing database, API functions, and appointment data model.
+
+After an assignment, rescheduling, or cancellation:
+- Wait for the database operation to succeed before displaying success.
+- Update the Today's Dialysis list without requiring a full-page reload.
+- Refresh the patient's assignment status and appointment details.
+- Handle failures with clear error messages.
+- Do not show an appointment as assigned, rescheduled, or cancelled if the database operation fails.
+- Prevent repeated clicks from creating duplicate operations.
+
+Use the existing appointment status values if available. Map them correctly rather than introducing incompatible status names.
+
+## 7. Design Requirements
+
+- Follow the existing Administrator Portal design, colors, typography, buttons, badges, tables, and modal styles.
+- Keep the Today's Dialysis dashboard layout consistent.
+- Make the patient details panel and assignment form responsive.
+- Do not redesign unrelated dashboard sections.
+
+## 8. Strict Scope Restrictions
+
+Modify only the relevant Administrator Portal components, assignment/rescheduling logic, and necessary backend/database operations.
+
+Do not:
+- Modify the Patient Portal UI.
+- Modify the Doctor Portal UI.
+- Rebuild the application.
+- Delete patient records.
+- Delete historical appointments.
+- Change authentication or roles unnecessarily.
+- Remove the Treating Doctor field from unrelated pages.
+- Break existing future appointment scheduling.
+
+## 9. Test Before Finishing
+
+Verify all of the following:
+
+1. An assigned patient displays an Assigned badge in Today's Dialysis.
+2. An unassigned patient displays Unassigned and can be assigned.
+3. Clicking an assigned patient's name opens their appointment details.
+4. Reschedule opens the edit form and saves changes without creating a duplicate appointment.
+5. Cancel requires confirmation and correctly updates the appointment status.
+6. Cancelled appointments no longer occupy a slot.
+7. Assigning from Today's Dialysis automatically uses today's date.
+8. Rescheduling from Today's Dialysis defaults to today's date.
+9. The Treating Doctor section is absent from the assignment form.
+10. Assignment does not fail because of a missing treating doctor.
+11. Machine availability and conflict checks continue to work.
+12. Assignment status persists after refreshing the dashboard.
+13. Future appointment scheduling elsewhere remains functional.
+14. Patient and Doctor Portals continue working normally.
+
+**Final instruction:** Inspect the existing implementation first, make the smallest reliable changes, and test the complete assignment, rescheduling, and cancellation workflows. Do not implement visual-only changes; all actions must persist correctly in the database.

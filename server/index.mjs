@@ -349,7 +349,21 @@ export async function api(req, res, url) {
       const actor=await requireStaff(req), id=decodeURIComponent(parts[2]), x=object(await readJson(req));
       if(!SESSION_STATUSES.includes(x.status)) throw httpError(400,"Invalid session status.");
       if (x.status === "missed" && "missedReason" in x) x.missedReason = text(x.missedReason, "missed reason", { max: 500 });
-      const allowed = ["status","attendance","missedReason","missedReasonOther","vitals","complications","importantNote","notes","startTime","endTime","duration"];
+      const rescheduleFields = ["machineId","unitId","date","slot"];
+      const isRescheduling = rescheduleFields.some(key => key in x);
+      if (isRescheduling) {
+        if (actor.role !== "admin") throw httpError(403, "Only administrators can reschedule appointments.");
+        if (rescheduleFields.some(key => !(key in x))) throw httpError(400, "A reschedule must include its unit, machine, date, and slot.");
+        x.machineId = text(x.machineId, "machineId", { required: true, max: 100 });
+        x.unitId = text(x.unitId, "unitId", { required: true, max: 100 });
+        x.date = dateOnly(x.date, "date");
+        x.slot = text(x.slot, "slot", { required: true, max: 80 });
+        for (const key of ["startTime","endTime","duration","emergencyTime"]) {
+          if (key in x) x[key] = text(x[key], key, { max: 100 });
+        }
+        if ("slotType" in x && !["normal","emergency"].includes(x.slotType)) throw httpError(400, "Invalid slot type.");
+      }
+      const allowed = ["status","attendance","missedReason","missedReasonOther","vitals","complications","importantNote","notes","startTime","endTime","duration","machineId","unitId","date","slot","slotType","emergencyTime"];
       for (const key of Object.keys(x)) if(!allowed.includes(key)) delete x[key];
       if("vitals" in x) object(x.vitals,"vitals");
       if("complications" in x && (!Array.isArray(x.complications)||x.complications.some(v=>typeof v!=="string"))) throw httpError(400,"Complications must be a list of text values.");
@@ -357,22 +371,54 @@ export async function api(req, res, url) {
       const result = await transaction(async client => {
         const existing = (await client.query("SELECT * FROM dialysis_sessions WHERE id=$1 FOR UPDATE", [id])).rows[0];
         if (!existing) throw httpError(404, "Session was not found.");
-        if(["scheduled","waiting","called","running"].includes(x.status)) {
-          const patient=await fetchPatient(client,existing.patient_id);
-          if(patient.lifecycle!=="Active") throw httpError(409,"Inactive patients cannot have active sessions.");
+        const beforeRow = (await client.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0];
+        if (isRescheduling) {
+          if (!["scheduled","waiting","called"].includes(existing.status)) throw httpError(409, "Only an active, not-yet-started appointment can be rescheduled.");
+          if (x.status !== existing.status) throw httpError(409, "Rescheduling cannot also change the appointment status.");
+          const patient = (await client.query("SELECT * FROM patients WHERE id=$1 FOR UPDATE", [existing.patient_id])).rows[0];
+          if (!patient || patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be rescheduled.");
+          const lockedMachines = (await client.query(
+            "SELECT * FROM dialysis_machines WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE",
+            [[...new Set([existing.machine_id, x.machineId])].sort()],
+          )).rows;
+          const targetMachine = lockedMachines.find(machine => machine.id === x.machineId);
+          if (!targetMachine || targetMachine.unit_id !== x.unitId) throw httpError(400, "Machine does not belong to the selected unit.");
+          if (!["available","scheduled","in-use"].includes(targetMachine.status)) throw httpError(409, "Machine is unavailable.");
+          if (!compatibleMachine(patient.viral_category, targetMachine.category)) throw httpError(409, "Machine is not compatible with the patient's viral category.");
+          try {
+            await client.query(
+              "UPDATE dialysis_sessions SET machine_id=$2,unit_id=$3,session_date=$4,slot=$5,status=$6,data=data || $7::jsonb,updated_at=now() WHERE id=$1",
+              [id,x.machineId,x.unitId,x.date,x.slot,x.status,x],
+            );
+          } catch (error) {
+            if (error.code === "23505") throw httpError(409, "Patient or machine is already booked for this date and slot.");
+            throw error;
+          }
+        } else {
+          if(["scheduled","waiting","called","running"].includes(x.status)) {
+            const patient=await fetchPatient(client,existing.patient_id);
+            if(patient.lifecycle!=="Active") throw httpError(409,"Inactive patients cannot have active sessions.");
+          }
+          await client.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1", [id,x.status,x]);
         }
-        await client.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1", [id,x.status,x]);
         const session = (await client.query("SELECT s.*,p.uhid,p.data patient_data,m.code,m.name machine_name,u.name unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0];
-        const machine = ["missed", "cancelled"].includes(x.status)
+        const machines = isRescheduling
+          ? await Promise.all([...new Set([existing.machine_id, x.machineId])].sort().map(machineId => recalculateMachineAvailability(client, machineId)))
+          : [];
+        const machine = !isRescheduling && ["missed", "cancelled"].includes(x.status)
           ? await recalculateMachineAvailability(client, existing.machine_id)
           : null;
-        await audit(client,actor,"session.update","session",id,{status:x.status,before:existing.data,after:sessionDto(session)});
+        await audit(client,actor,isRescheduling?"session.reschedule":"session.update","session",id,{
+          status:x.status,
+          before:isRescheduling?sessionDto(beforeRow):existing.data,
+          after:sessionDto(session),
+        });
         if (existing.status !== x.status || x.importantNote || x.vitals || x.complications) {
           await notifyRole(client,actor,actor.role==="doctor"?"admin":"doctor","info",
             x.status==="missed"?"Missed slot recorded":"Session updated",
             `${session.patient_data.name} (${session.uhid}): ${x.status}.`,{patientId:session.patient_id,recordId:id});
         }
-        return { session: sessionDto(session), machine };
+        return { session: sessionDto(session), machine, ...(isRescheduling ? { machines } : {}) };
       });
       sendJson(res,200,result);
       return true;
