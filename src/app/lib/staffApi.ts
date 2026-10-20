@@ -408,7 +408,7 @@ export type SessionUpdatePayload = {
 };
 export type SchedulingOptions = {
   doctors: { id: string; name: string }[];
-  prescriptions: { id: string; diagnosis: string | null; version: number }[];
+  prescriptions: { id: string; diagnosis: string | null; version: number; prescribedSlot: string | null }[];
 };
 export const fetchSchedulingOptions = (patientId?: string) =>
   request<SchedulingOptions>(`/api/scheduling-options?patientId=${encodeURIComponent(patientId || "")}`);

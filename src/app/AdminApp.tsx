@@ -7,8 +7,9 @@ import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
 import { ScheduleClinicalLinks, type ScheduleLinks } from "./components/admin/ScheduleClinicalLinks";
 import { logoutStaff } from "./lib/appointmentApi";
-import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, fetchSchedulingOptions, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
 import { localDateKey } from "./lib/scheduleDateMapping.mjs";
+import { appointmentsOverlap, blocksReservation, prescriptionSlot, MACHINE_RESERVED_MESSAGE } from "../../shared/scheduling.mjs";
 import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
 import {
@@ -503,43 +504,48 @@ function isMachineCompatible(patient: Patient, machine: Machine): boolean {
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
-function validateAssignment(draft: AssignmentDraft, sessions: DialysisSession[]): ValidationResult {
+function validateAssignment(draft: AssignmentDraft, sessions: DialysisSession[], currentMachines: Machine[] = [], excludeId?: string): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
   if (!draft.patient || !draft.machine || !draft.date || !draft.slot) {
     return { ok: false, errors: ["Incomplete assignment details."], warnings: [] };
   }
+  const currentMachine = currentMachines.find(item => item.id === draft.machine!.id);
+  const machine = currentMachine ?? draft.machine;
+  if (currentMachines.length > 0 && !currentMachine) {
+    errors.push("The selected machine is no longer available. Choose another machine.");
+  }
+  const booking = { ...draft, machine, status: "scheduled" };
 
   if (draft.patient.treatmentStatus !== "Active") {
     errors.push(`Patient is marked as "${draft.patient.treatmentStatus}" and cannot be scheduled.`);
   }
 
-  if (draft.machine.status === "maintenance") errors.push(`${draft.machine.number} is under maintenance.`);
-  if (draft.machine.status === "disabled")    errors.push(`${draft.machine.number} is disabled.`);
-  if (draft.machine.status === "in-use")      errors.push(`${draft.machine.number} is currently in use.`);
+  if (machine.unit !== draft.unit?.id) errors.push("Select a machine in the selected dialysis unit.");
+  if (machine.status === "maintenance") errors.push(`${machine.number} is under maintenance.`);
+  if (machine.status === "disabled") errors.push(`${machine.number} is disabled.`);
 
   const conflict = sessions.find(s =>
-    s.patientId === draft.patient!.id && s.date === draft.date &&
-    s.slot === draft.slot && s.attendance !== "Cancelled"
+    s.id !== excludeId && s.patientId === draft.patient!.id &&
+    blocksReservation(s) && appointmentsOverlap(s, booking)
   );
-  if (conflict) errors.push(`${draft.patient.name} is already scheduled on ${draft.machine.number} for ${draft.slot} on ${draft.date}.`);
+  if (conflict) errors.push(`${draft.patient.name} already has an appointment overlapping this time.`);
 
   const machineConflict = sessions.find(s =>
-    s.machineId === draft.machine!.id && s.date === draft.date &&
-    s.slot === draft.slot && s.attendance !== "Cancelled"
+    s.id !== excludeId && s.machineId === machine.id &&
+    blocksReservation(s) && appointmentsOverlap(s, booking)
   );
-  if (machineConflict) errors.push(`${draft.machine.number} already has a session for ${draft.slot} on ${draft.date}.`);
+  if (machineConflict) errors.push(MACHINE_RESERVED_MESSAGE);
 
   // Viral compatibility
-  if (draft.patient && draft.machine) {
+  if (draft.patient) {
     const vp = draft.patient.viralStatus;
     const awaiting = vp.hepatitisB === "Awaiting Report" || vp.hepatitisC === "Awaiting Report" || vp.hiv === "Awaiting Report";
-    if (awaiting) {
-      warnings.push("Viral status is awaiting report. Assign with caution.");
-    } else if (!isMachineCompatible(draft.patient, draft.machine)) {
+    if (awaiting) warnings.push("Viral status is awaiting report. Assign with caution.");
+    if (!isMachineCompatible(draft.patient, machine)) {
       const req = getRequiredCategory(draft.patient);
-      warnings.push(`Viral compatibility mismatch. This patient requires a ${req} machine. Current: ${draft.machine.category}.`);
+      errors.push(`Viral compatibility mismatch. This patient requires a ${req} machine. Current: ${machine.category}.`);
     }
   }
 
@@ -809,13 +815,26 @@ function Step2SelectUnit({ units, machines, patient, selected, onSelect }: {
 
 // ─── Step 3: Select Machine ───────────────────────────────────────────────────
 
-function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
+function Step3SelectMachine({ machines, patient, unit, selected, onSelect, sessions, date, slot, onDateChange, onSlotChange, todayOnly = false }: {
   machines: Machine[]; patient: Patient; unit: DialysisUnit;
   selected: Machine | null; onSelect: (m: Machine) => void;
+  sessions: DialysisSession[]; date: string; slot: string;
+  onDateChange: (date: string) => void; onSlotChange: (slot: string) => void;
+  todayOnly?: boolean;
 }) {
   const req = getRequiredCategory(patient);
-  const unitMachines = machines.filter(m => m.unit === unit.id && m.status !== "disabled");
-  const isAssignable = (m: Machine) => m.status === "available" || m.status === "scheduled";
+  const unitMachines = machines.filter(m => m.unit === unit.id);
+  const availability = (m: Machine) => {
+    if (m.status === "maintenance") return "Under Maintenance";
+    if (m.status === "disabled") return "Disabled";
+    if (date && slot && sessions.some(session => session.machineId === m.id &&
+      blocksReservation(session) && appointmentsOverlap(session, {
+        date, slot, slotType: "normal", duration: "4 hours",
+      }))) return "Reserved";
+    return "Available";
+  };
+  const isAssignable = (m: Machine) => ["available", "scheduled", "in-use"].includes(m.status)
+    && availability(m) === "Available" && (getCompatibility(m) !== "warn");
 
   const machineColors: Record<MachineStatus, string> = {
     available:   "border-emerald-300 bg-emerald-50/60",
@@ -828,6 +847,7 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
   const getCompatibility = (m: Machine): "match" | "warn" | "awaiting" | "ok" => {
     const vp = patient.viralStatus;
     const awaiting = vp.hepatitisB === "Awaiting Report" || vp.hepatitisC === "Awaiting Report" || vp.hiv === "Awaiting Report";
+    if (!isMachineCompatible(patient, m)) return "warn";
     if (awaiting) return "awaiting";
     if (isMachineCompatible(patient, m)) return "match";
     return "warn";
@@ -839,8 +859,27 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
         <Building2 className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
         <p className="text-sm text-violet-800">
           Showing machines in <strong>{unit.name}</strong>. Required category: <strong>{req}</strong>.
-          Only <strong>Available</strong> machines can be selected.
+          Choose the date and slot to check live schedule conflicts before selecting a machine.
         </p>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+          Appointment date
+          {todayOnly
+            ? <input aria-label="Machine availability date" type="text" value={date} readOnly
+                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm normal-case tracking-normal" />
+            : <input aria-label="Machine availability date" type="date" value={date} onChange={e => onDateChange(e.target.value)}
+                min={localDateKey(new Date())}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal" />}
+        </label>
+        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+          Time slot
+          <select aria-label="Machine availability time slot" value={slot} onChange={e => onSlotChange(e.target.value)}
+            className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal">
+            <option value="">Select a slot to check availability</option>
+            {SLOTS.map(item => <option key={item.label} value={item.label}>{item.label} · {item.startFmt}–{item.endFmt}</option>)}
+          </select>
+        </label>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[440px] overflow-y-auto pr-1">
@@ -848,6 +887,8 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
           const assignable = isAssignable(m);
           const isSelected = selected?.id === m.id;
           const compat = getCompatibility(m);
+          const bookingStatus = availability(m);
+          const conflict = bookingStatus === "Reserved";
 
           return (
             <button key={m.id} onClick={() => assignable && onSelect(m)} disabled={!assignable}
@@ -879,9 +920,9 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
                 )}
               </div>
 
-              {compat === "warn" && assignable && (
+              {compat === "warn" && (
                 <div className="mt-1 text-[10px] text-amber-800 bg-amber-100 px-2 py-1 rounded-lg border border-amber-200">
-                  ⚠ Mismatch — patient needs {req}, machine is {m.category}
+                  Patient requires {req}; this machine is {m.category}
                 </div>
               )}
               {compat === "match" && (
@@ -889,13 +930,23 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
                   <CheckCircle className="w-2.5 h-2.5" /> Viral match — {m.category}
                 </div>
               )}
-              {compat === "awaiting" && assignable && (
+              {compat === "awaiting" && (
                 <div className="mt-1 text-[10px] text-amber-800 bg-amber-100 px-2 py-1 rounded-lg border border-amber-200">
-                  ⚠ Viral results awaited — assign with caution
+                  Viral results awaited — assign with caution
                 </div>
               )}
-              {!assignable && (
-                <div className="mt-1 text-[10px] text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">Not available</div>
+              <div className={`mt-1 text-[10px] px-2 py-1 rounded-lg border ${
+                bookingStatus === "Available" ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : bookingStatus === "Reserved" ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : "border-red-200 bg-red-50 text-red-700"
+              }`}>
+                {date && slot ? bookingStatus : m.status === "maintenance" ? "Under Maintenance" : m.status === "disabled" ? "Disabled" : "Choose date and slot"}
+                {conflict ? ` · ${MACHINE_RESERVED_MESSAGE}` : ""}
+              </div>
+              {!assignable && !conflict && (
+                <div className="mt-1 text-[10px] text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
+                  {m.status === "maintenance" ? "Machine is under maintenance" : m.status === "disabled" ? "Machine is disabled" : "Not eligible"}
+                </div>
               )}
             </button>
           );
@@ -910,12 +961,13 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
 
 // ─── Step 4: Schedule ─────────────────────────────────────────────────────────
 
-function Step4Schedule({ draft, onChange, validation, units, todayOnly = false }: {
+function Step4Schedule({ draft, onChange, validation, units, todayOnly = false, prescriptionState }: {
   draft: AssignmentDraft;
   onChange: (key: keyof AssignmentDraft, value: string) => void;
   validation: ValidationResult;
   units: DialysisUnit[];
   todayOnly?: boolean;
+  prescriptionState: { loading: boolean; error: string | null; retry: () => void; source: string; issue: string | null };
 }) {
   const inputCls = "w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white";
   const labelCls = "block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5";
@@ -967,6 +1019,26 @@ function Step4Schedule({ draft, onChange, validation, units, todayOnly = false }
           ))}
         </div>
       )}
+      {validation.ok && draft.date && draft.slot && (
+        <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          Machine available for this slot. Availability will be checked again when the appointment is saved.
+        </p>
+      )}
+      <div className={`rounded-xl border p-3 text-sm ${
+        prescriptionState.error ? "border-red-200 bg-red-50 text-red-800"
+          : prescriptionState.loading ? "border-violet-200 bg-violet-50 text-violet-800"
+            : prescriptionState.issue ? "border-amber-200 bg-amber-50 text-amber-900"
+              : "border-emerald-200 bg-emerald-50 text-emerald-800"
+      }`}>
+        {prescriptionState.loading ? "Loading prescribed slot defaults…" : prescriptionState.error ? (
+          <span role="alert">{prescriptionState.error}{" "}
+            <button type="button" onClick={prescriptionState.retry} className="font-bold underline">Retry</button>
+          </span>
+        ) : prescriptionState.issue === "missing" ? "No prescribed slot is available. Select a time slot manually to continue."
+          : prescriptionState.issue === "unsupported" ? "The selected prescription contains an unsupported slot. Select a time slot manually to continue."
+            : prescriptionState.source ? `Default slot loaded from ${prescriptionState.source}. You may choose another appointment slot; the prescription will not be changed.`
+              : "No dialysis prescription is available. Select a time slot manually to continue."}
+      </div>
 
       {/* Slot Type */}
       <div>
@@ -1005,11 +1077,12 @@ function Step4Schedule({ draft, onChange, validation, units, todayOnly = false }
       {draft.slotType === "normal" && (
         <div>
           <label className={labelCls}>Normal Dialysis Slot *</label>
+          <p className="mb-2 text-xs text-slate-500">Prescription default: {prescriptionState.issue === "missing" ? "missing" : prescriptionState.issue === "unsupported" ? "unsupported" : prescriptionState.source || "not available"}</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {SLOTS.map(slot => {
               const isSelected = draft.slot === slot.label;
               return (
-                <button key={slot.label} type="button"
+                <button key={slot.label} type="button" aria-pressed={isSelected}
                   onClick={() => handleNormalSlot(slot.display)}
                   className={`flex flex-col items-start p-4 rounded-2xl border-2 transition-all text-left ${
                     isSelected
@@ -1140,7 +1213,7 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitti
           <button onClick={onCancel} disabled={isSubmitting} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium disabled:opacity-50">
             Cancel
           </button>
-          <button onClick={onConfirm} disabled={isSubmitting} className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 disabled:cursor-wait disabled:opacity-60">
+          <button onClick={onConfirm} disabled={isSubmitting || !validation.ok} className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 disabled:cursor-wait disabled:opacity-60">
             {isSubmitting ? "Saving…" : "Confirm"}
           </button>
         </div>
@@ -1179,6 +1252,56 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [prefillLoading, setPrefillLoading] = useState(Boolean(prefillPatientId));
   const [prefillError, setPrefillError] = useState<string | null>(null);
+  const [scheduleOptions, setScheduleOptions] = useState<Array<{ id: string; diagnosis: string | null; version: number; prescribedSlot: string | null }>>([]);
+  const [prescriptionLoading, setPrescriptionLoading] = useState(false);
+  const [prescriptionError, setPrescriptionError] = useState<string | null>(null);
+  const [prescriptionRetry, setPrescriptionRetry] = useState(0);
+  const prescriptionLoadedFor = useRef<string | null>(null);
+  const defaultAppliedKey = useRef("");
+  const slotOverridden = useRef(false);
+
+  useEffect(() => {
+    const patientId = draft.patient?.id;
+    if (!patientId) {
+      setScheduleOptions([]);
+      setPrescriptionLoading(false);
+      setPrescriptionError(null);
+      prescriptionLoadedFor.current = null;
+      return;
+    }
+    let active = true;
+    setPrescriptionLoading(true);
+    setPrescriptionError(null);
+    fetchSchedulingOptions(patientId).then(result => {
+      if (!active) return;
+      const rows = result.prescriptions as Array<{ id: string; diagnosis: string | null; version: number; prescribedSlot?: string | null }>;
+      setScheduleOptions(rows.map(row => ({ ...row, prescribedSlot: row.prescribedSlot ?? null })));
+      prescriptionLoadedFor.current = patientId;
+    }).catch(error => {
+      if (active) setPrescriptionError(error instanceof Error ? error.message : "Prescription defaults could not be loaded.");
+    }).finally(() => { if (active) setPrescriptionLoading(false); });
+    return () => { active = false; };
+  }, [draft.patient?.id, prescriptionRetry]);
+
+  useEffect(() => {
+    const patientId = draft.patient?.id;
+    if (!patientId || prescriptionLoading || prescriptionError || prescriptionLoadedFor.current !== patientId) return;
+    const chosen = scheduleOptions.find(item => item.id === draft.prescriptionId) ?? scheduleOptions[0];
+    const key = `${patientId}:${draft.prescriptionId || "latest"}:${chosen?.version ?? "none"}`;
+    if (defaultAppliedKey.current === key) return;
+    defaultAppliedKey.current = key;
+    if (slotOverridden.current) return;
+    const parsed = prescriptionSlot(chosen?.prescribedSlot);
+    if (parsed.slot) {
+      const selectedSlot = SLOTS.find(item => item.label === parsed.slot)!;
+      setDraft(current => ({
+        ...current, slot: parsed.slot, slotType: "normal",
+        startTime: selectedSlot.startFmt, endTime: selectedSlot.endFmt, duration: "4 hours",
+      }));
+    } else if (draft.prescriptionId) {
+      setDraft(current => ({ ...current, slot: "", startTime: "", endTime: "" }));
+    }
+  }, [draft.patient?.id, draft.prescriptionId, prescriptionLoading, prescriptionError, scheduleOptions]);
 
   useEffect(() => {
     if (!prefillPatientId) {
@@ -1190,7 +1313,15 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     let cancelled = false;
     setPrefillLoading(true);
     setPrefillError(null);
-    setDraft(d => ({ ...d, patient: null, unit: null, machine: prefillMachine ?? null, date: assignedDate }));
+    defaultAppliedKey.current = "";
+    slotOverridden.current = false;
+    prescriptionLoadedFor.current = null;
+    setScheduleOptions([]);
+    setDraft(d => ({
+      ...d, patient: null, unit: null, machine: prefillMachine ?? null,
+      prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
+      date: assignedDate,
+    }));
     setStep(1);
     fetchPatientById(prefillPatientId)
       .then(patient => {
@@ -1213,21 +1344,42 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
 
   const validation = useMemo(() => {
     if (step !== 4 && !showConfirm) return { ok: true, errors: [], warnings: [] };
-    return validateAssignment(draft, sessions);
-  }, [draft, sessions, step, showConfirm]);
+    return validateAssignment(draft, sessions, machines);
+  }, [draft, sessions, machines, step, showConfirm]);
+  const submitValidation = prescriptionLoading || prescriptionError
+    ? { ...validation, ok: false }
+    : validation;
 
   const slotReady = draft.slotType === "normal" ? !!draft.slot && draft.slot !== "Emergency"
     : draft.slotType === "emergency" ? !!draft.emergencyTime
     : false;
+  const liveSelectedMachine = draft.machine
+    ? machines.find(machine => machine.id === draft.machine!.id) ?? (machines.length ? null : draft.machine)
+    : null;
+  const selectedMachineValid = Boolean(draft.patient && draft.unit && liveSelectedMachine &&
+    liveSelectedMachine.unit === draft.unit.id &&
+    ["available", "scheduled", "in-use"].includes(liveSelectedMachine.status) &&
+    isMachineCompatible(draft.patient, liveSelectedMachine) &&
+    !(draft.date && draft.slot && sessions.some(session =>
+      session.machineId === liveSelectedMachine.id && blocksReservation(session) &&
+      appointmentsOverlap(session, {
+        date: draft.date, slot: draft.slot,
+        slotType: draft.slotType === "emergency" ? "emergency" : "normal",
+        emergencyTime: draft.emergencyTime, startTime: draft.startTime, duration: draft.duration,
+      })
+    ))
+  );
   const canProceed: Record<number, boolean> = {
     1: !!draft.patient,
-    2: !!draft.unit,
-    3: !!draft.machine,
-    4: !!draft.date && !!draft.slotType && slotReady && validation.errors.length === 0,
+    2: !!draft.unit && !prescriptionLoading,
+    3: !!draft.machine && selectedMachineValid,
+    4: !!draft.date && !!draft.slotType && slotReady && submitValidation.ok,
   };
 
   const handleConfirm = async () => {
     if (submissionInFlight.current) return;
+    const freshValidation = validateAssignment(draft, sessions, machines);
+    if (!freshValidation.ok || prescriptionLoading || prescriptionError) return;
     const newSession: DialysisSession = {
       id: `S${Date.now()}`,
       patientId: draft.patient!.id,
@@ -1329,7 +1481,16 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               Select Patient
             </h3>
             <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => setDraft(d => ({ ...d, prescriptionId: p.id === d.patient?.id ? d.prescriptionId : "", patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
+              onSelect={p => {
+                if (p.id !== draft.patient?.id) {
+                  slotOverridden.current = false; defaultAppliedKey.current = ""; prescriptionLoadedFor.current = null;
+                  setScheduleOptions([]); setPrescriptionError("");
+                }
+                setDraft(d => p.id === d.patient?.id ? { ...d, patient: p } : {
+                  ...d, patient: p, prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
+                  machine: null, unit: null,
+                });
+              }} />
           </>
         )}
         {step === 2 && draft.patient && (
@@ -1341,6 +1502,11 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
             <Step2SelectUnit units={units} machines={machines} patient={draft.patient!}
               selected={draft.unit}
               onSelect={u => setDraft(d => ({ ...d, unit: u, machine: null }))} />
+            {prescriptionLoading && <p className="mt-3 text-xs text-violet-700">Loading this patient’s prescription slot before machine selection…</p>}
+            {prescriptionError && <p role="alert" className="mt-3 text-xs text-red-700">
+              {prescriptionError}{" "}
+              <button type="button" className="font-semibold underline" onClick={() => setPrescriptionRetry(value => value + 1)}>Retry</button>
+            </p>}
           </>
         )}
         {step === 3 && draft.patient && draft.unit && (
@@ -1349,7 +1515,14 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">3</span>
               Select Machine — {draft.unit?.name}
             </h3>
-            <Step3SelectMachine machines={machines} patient={draft.patient!} unit={draft.unit!}
+            <Step3SelectMachine machines={machines} patient={draft.patient!} unit={draft.unit!} sessions={sessions}
+              date={draft.date} slot={draft.slot} onDateChange={date => setField("date", date)}
+              todayOnly={todayOnly}
+              onSlotChange={value => {
+                const selectedSlot = SLOTS.find(item => item.label === value);
+                slotOverridden.current = true;
+                setDraft(d => ({ ...d, slot: value, slotType: "normal", startTime: selectedSlot?.startFmt || "", endTime: selectedSlot?.endFmt || "", duration: "4 hours" }));
+              }}
               selected={draft.machine} onSelect={m => setDraft(d => ({ ...d, machine: m }))} />
           </>
         )}
@@ -1360,7 +1533,16 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               Select Patient
             </h3>
             <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => setDraft(d => ({ ...d, prescriptionId: p.id === d.patient?.id ? d.prescriptionId : "", patient: p, unit: d.machine ? d.unit : null, machine: d.machine }))} />
+              onSelect={p => {
+                if (p.id !== draft.patient?.id) {
+                  slotOverridden.current = false; defaultAppliedKey.current = ""; prescriptionLoadedFor.current = null;
+                  setScheduleOptions([]); setPrescriptionError("");
+                }
+                setDraft(d => p.id === d.patient?.id ? { ...d, patient: p } : {
+                  ...d, patient: p, prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
+                  machine: null, unit: null,
+                });
+              }} />
           </>
         )}
         {step === 4 && (
@@ -1369,7 +1551,28 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">4</span>
               Schedule & Confirm
             </h3>
-            <Step4Schedule draft={draft} onChange={setField} validation={validation} units={units} todayOnly={todayOnly} />
+            <Step4Schedule draft={draft} onChange={(key, value) => {
+              if (key === "slot") slotOverridden.current = true;
+              if (key === "prescriptionId") defaultAppliedKey.current = "";
+              setField(key, value);
+            }} validation={submitValidation} units={units} todayOnly={todayOnly}
+              prescriptionState={{
+                loading: prescriptionLoading, error: prescriptionError,
+                retry: () => setPrescriptionRetry(value => value + 1),
+                source: (() => {
+                  const selected = scheduleOptions.find(item => item.id === draft.prescriptionId) ?? scheduleOptions[0];
+                  if (!selected) return "";
+                  const parsed = prescriptionSlot(selected.prescribedSlot);
+                  const slotDetails = SLOTS.find(item => item.label === parsed.slot);
+                  const prescribedLabel = slotDetails ? ` · Default ${slotDetails.label} (${slotDetails.startFmt}–${slotDetails.endFmt})`
+                    : parsed.issue === "unsupported" ? " · Unsupported prescribed slot" : " · No prescribed slot";
+                  return `${selected.diagnosis || "Dialysis prescription"} · v${selected.version}${prescribedLabel}`;
+                })(),
+                issue: (() => {
+                  const selected = scheduleOptions.find(item => item.id === draft.prescriptionId) ?? scheduleOptions[0];
+                  return prescriptionSlot(selected?.prescribedSlot).issue;
+                })(),
+              }} />
           </>
         )}
       </div>
@@ -1401,7 +1604,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       </div>
 
       {showConfirm && (
-        <ConfirmationDialog draft={draft} validation={validation}
+        <ConfirmationDialog draft={draft} validation={submitValidation}
           onConfirm={handleConfirm} onCancel={() => { if (!isSubmitting) setShowConfirm(false); }}
           isSubmitting={isSubmitting} submissionError={submissionError} todayOnly={todayOnly} />
       )}
@@ -1423,6 +1626,49 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
   const [clinicalLinks, setClinicalLinks] = useState<ScheduleLinks>({ doctor: "", doctorId: "", prescriptionId: "" });
   const [notes, setNotes] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [schedulingOptions, setSchedulingOptions] = useState<Array<{ id: string; diagnosis: string | null; version: number; prescribedSlot: string | null }>>([]);
+  const [prescriptionLoading, setPrescriptionLoading] = useState(false);
+  const [prescriptionError, setPrescriptionError] = useState("");
+  const [prescriptionRetry, setPrescriptionRetry] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const submissionGuard = useRef(false);
+  const slotOverride = useRef(false);
+  const defaultsApplied = useRef("");
+  const optionsLoadedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedPatient) {
+      setSchedulingOptions([]);
+      optionsLoadedFor.current = null;
+      defaultsApplied.current = "";
+      return;
+    }
+    let active = true;
+    optionsLoadedFor.current = null;
+    setPrescriptionLoading(true);
+    setPrescriptionError("");
+    setSchedulingOptions([]);
+    fetchSchedulingOptions(selectedPatient.id).then(result => {
+      if (!active) return;
+      setSchedulingOptions((result.prescriptions as Array<{ id: string; diagnosis: string | null; version: number; prescribedSlot?: string | null }>)
+        .map(row => ({ ...row, prescribedSlot: row.prescribedSlot ?? null })));
+      optionsLoadedFor.current = selectedPatient.id;
+    }).catch(failure => {
+      if (active) setPrescriptionError(failure instanceof Error ? failure.message : "Prescription defaults could not be loaded.");
+    }).finally(() => { if (active) setPrescriptionLoading(false); });
+    return () => { active = false; };
+  }, [selectedPatient?.id, prescriptionRetry]);
+
+  useEffect(() => {
+    if (!selectedPatient || prescriptionLoading || prescriptionError || optionsLoadedFor.current !== selectedPatient.id) return;
+    const selectedRx = schedulingOptions.find(item => item.id === clinicalLinks.prescriptionId) ?? schedulingOptions[0];
+    const key = `${selectedPatient.id}:${clinicalLinks.prescriptionId || "latest"}:${selectedRx?.version ?? "none"}`;
+    if (defaultsApplied.current === key) return;
+    defaultsApplied.current = key;
+    if (slotOverride.current) return;
+    const normalized = prescriptionSlot(selectedRx?.prescribedSlot);
+    if (normalized.slot) setSelectedSlot(normalized.slot);
+  }, [selectedPatient?.id, clinicalLinks.prescriptionId, prescriptionLoading, prescriptionError, schedulingOptions]);
 
   const filtered = patients.filter(p =>
     p.treatmentStatus === "Active" &&
@@ -1432,17 +1678,27 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
   const slot = SLOTS.find(s => s.label === selectedSlot);
 
   const draft: AssignmentDraft = {
-    patient: selectedPatient, unit: null, machine,
+    patient: selectedPatient, unit: { id: machine.unit, name: machine.unit }, machine,
     slot: selectedSlot, startTime: slot?.startFmt ?? "", endTime: slot?.endFmt ?? "",
     duration: "4 hours", doctor: clinicalLinks.doctor, notes, date,
   };
   const validation = selectedPatient && date && selectedSlot
-    ? validateAssignment(draft, sessions)
+    ? validateAssignment(draft, sessions, [machine])
     : { ok: true, errors: [], warnings: [] };
 
-  const canConfirm = !!selectedPatient && !!date && !!selectedSlot && validation.errors.length === 0;
+  const canConfirm = !!selectedPatient && !!date && !!selectedSlot && !prescriptionLoading && !prescriptionError && validation.errors.length === 0 && !saving;
+  const quickMachineConflict = Boolean(date && selectedSlot && sessions.some(session =>
+    session.machineId === machine.id && blocksReservation(session) &&
+    appointmentsOverlap(session, { date, slot: selectedSlot, slotType: "normal", duration: "4 hours" })
+  ));
+  const quickMachineAvailability = machine.status === "maintenance" ? "Under Maintenance"
+    : machine.status === "disabled" ? "Disabled" : quickMachineConflict ? "Reserved"
+      : ["available", "scheduled", "in-use"].includes(machine.status) ? "Available" : "Unavailable";
 
   const handleConfirm = async () => {
+    if (submissionGuard.current || !canConfirm) return;
+    submissionGuard.current = true;
+    setSaving(true);
     const newSession: DialysisSession = {
       id: `S${Date.now()}`, patientId: selectedPatient!.id,
       patientName: selectedPatient!.name, uhid: selectedPatient!.uhid,
@@ -1454,6 +1710,7 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
     };
     try { await onAssigned(newSession, machine.id); setConfirmed(true); }
     catch (error) { window.alert(error instanceof Error ? error.message : "Assignment could not be saved."); }
+    finally { submissionGuard.current = false; setSaving(false); }
   };
 
   const inputCls = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white";
@@ -1491,12 +1748,24 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
                 <div className="relative mb-2">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input type="text" placeholder="Name or UHID…" value={search}
-                    onChange={e => { setSearch(e.target.value); setSelectedPatient(null); }}
+                    onChange={e => {
+                      setSearch(e.target.value); setSelectedPatient(null);
+                      setSchedulingOptions([]); optionsLoadedFor.current = null; defaultsApplied.current = "";
+                      slotOverride.current = false; setSelectedSlot("");
+                      setClinicalLinks({ doctor: "", doctorId: "", prescriptionId: "" });
+                    }}
                     className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300" />
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1.5 border border-slate-100 rounded-xl p-2">
                   {filtered.slice(0, 10).map(p => (
-                    <button key={p.id} onClick={() => { setSelectedPatient(p); setClinicalLinks(d => ({ ...d, prescriptionId: p.id === selectedPatient?.id ? d.prescriptionId : "" })); }}
+                    <button key={p.id} onClick={() => {
+                      if (p.id !== selectedPatient?.id) {
+                        slotOverride.current = false; defaultsApplied.current = ""; optionsLoadedFor.current = null;
+                        setSchedulingOptions([]); setPrescriptionError(""); setSelectedSlot("");
+                      }
+                      setSelectedPatient(p);
+                      setClinicalLinks(d => ({ ...d, prescriptionId: p.id === selectedPatient?.id ? d.prescriptionId : "" }));
+                    }}
                       className={`w-full text-left px-3 py-2.5 rounded-lg transition-all text-sm ${selectedPatient?.id === p.id ? "bg-violet-50 border-2 border-violet-400" : "hover:bg-slate-50 border-2 border-transparent"}`}>
                       <div className="flex items-center justify-between">
                         <div>
@@ -1514,9 +1783,28 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
               {/* Slot selection */}
               <div>
                 <p className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Select Slot *</p>
+                {selectedPatient && (
+                  <div className={`mb-2 rounded-lg border p-2 text-xs ${
+                    prescriptionError ? "border-red-200 bg-red-50 text-red-800"
+                      : prescriptionLoading ? "border-violet-200 bg-violet-50 text-violet-800"
+                        : "border-slate-200 bg-slate-50 text-slate-600"
+                  }`}>
+                    {prescriptionLoading ? "Loading prescription slot…" : prescriptionError ? (
+                      <span role="alert">{prescriptionError}{" "}
+                        <button type="button" className="font-semibold underline" onClick={() => setPrescriptionRetry(value => value + 1)}>Retry</button>
+                      </span>
+                    ) : (() => {
+                      const rx = schedulingOptions.find(item => item.id === clinicalLinks.prescriptionId) ?? schedulingOptions[0];
+                      const parsed = prescriptionSlot(rx?.prescribedSlot);
+                      const defaultSlot = SLOTS.find(item => item.label === parsed.slot);
+                      return defaultSlot ? `Prescription default: ${defaultSlot.label} · ${defaultSlot.startFmt}–${defaultSlot.endFmt} from ${rx?.diagnosis || "dialysis prescription"} · v${rx?.version}`
+                        : `No supported prescription default${parsed.issue === "unsupported" ? " (unsupported slot)" : ""}; select manually.`;
+                    })()}
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-2">
                   {SLOTS.map(s => (
-                    <button key={s.label} type="button" onClick={() => setSelectedSlot(s.label)}
+                    <button key={s.label} type="button" onClick={() => { slotOverride.current = true; setSelectedSlot(s.label); }}
                       className={`text-left p-3 rounded-xl border-2 transition-all ${
                         selectedSlot === s.label ? "border-violet-500 bg-violet-50" : "border-slate-200 hover:border-violet-300"
                       }`}>
@@ -1536,9 +1824,26 @@ function QuickAssignModal({ machine, patients, sessions, onAssigned, onClose }: 
                 </div>
                 <div>
                   <ScheduleClinicalLinks key={selectedPatient?.id} patientId={selectedPatient?.id}
-                    value={clinicalLinks} onChange={setClinicalLinks} />
+                    value={clinicalLinks} onChange={links => {
+                      if (links.prescriptionId !== clinicalLinks.prescriptionId) {
+                        defaultsApplied.current = "";
+                        if (!slotOverride.current) {
+                          const selected = schedulingOptions.find(item => item.id === links.prescriptionId) ?? schedulingOptions[0];
+                          const prescribed = prescriptionSlot(selected?.prescribedSlot);
+                          setSelectedSlot(prescribed.slot);
+                        }
+                      }
+                      setClinicalLinks(links);
+                    }} />
                 </div>
               </div>
+              <p className={`rounded-lg border p-2 text-xs ${
+                quickMachineAvailability === "Available" ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}>
+                {machine.number}: {date && selectedSlot ? quickMachineAvailability : "Choose a date and slot to check availability."}
+                {quickMachineAvailability === "Reserved" ? ` ${MACHINE_RESERVED_MESSAGE}` : ""}
+              </p>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Notes</label>
@@ -1976,9 +2281,34 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
   const [mode, setMode] = useState<"details" | "reschedule" | "cancel">("details");
   const [unitId, setUnitId] = useState(session?.unit ?? "");
   const [machineId, setMachineId] = useState(session?.machineId ?? "");
-  const [slot, setSlot] = useState(SLOTS.some(item => item.label === session?.slot) ? session!.slot : SLOTS[0].label);
+  const [slot, setSlot] = useState(session?.slot || SLOTS[0].label);
+  const [emergencyTime, setEmergencyTime] = useState(session?.emergencyTime || session?.startTime || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState("");
+  const savingFlight = useRef(false);
+  const [prescriptionDefault, setPrescriptionDefault] = useState<{ source: string; slot: string; issue: string | null } | null>(null);
+  const [prescriptionDefaultLoading, setPrescriptionDefaultLoading] = useState(false);
+  const [prescriptionDefaultError, setPrescriptionDefaultError] = useState("");
+  const [prescriptionDefaultRetry, setPrescriptionDefaultRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setPrescriptionDefaultLoading(true);
+    setPrescriptionDefaultError("");
+    fetchSchedulingOptions(patient.id).then(options => {
+      if (!active) return;
+      const prescriptions = options.prescriptions as Array<{ id: string; diagnosis: string | null; version: number; prescribedSlot?: string | null }>;
+      const selected = prescriptions.find(item => item.id === session?.prescriptionId) ?? prescriptions[0];
+      const normalized = prescriptionSlot(selected?.prescribedSlot);
+      setPrescriptionDefault({
+        source: selected ? `${selected.diagnosis || "Dialysis prescription"} · v${selected.version}` : "",
+        slot: normalized.slot, issue: normalized.issue,
+      });
+    }).catch(failure => {
+      if (active) setPrescriptionDefaultError(failure instanceof Error ? failure.message : "Prescription default could not be loaded.");
+    }).finally(() => { if (active) setPrescriptionDefaultLoading(false); });
+    return () => { active = false; };
+  }, [patient.id, session?.prescriptionId, prescriptionDefaultRetry]);
   const assigned = Boolean(session);
   const canManageAppointment = Boolean(session && session.date === todayDate &&
     ["Scheduled","Waiting","Called"].includes(session.status));
@@ -1987,33 +2317,40 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
     Completed: "completed", Missed: "missed", Cancelled: "cancelled",
   };
   const selectedSlot = SLOTS.find(item => item.label === slot);
-  const eligibleMachines = useMemo(() => machines.filter(machine =>
-    machine.unit === unitId &&
-    ["available","scheduled","in-use"].includes(machine.status) &&
-    isMachineCompatible(patient, machine) &&
-    !sessions.some(existing =>
-      existing.id !== session?.id &&
-      existing.machineId === machine.id &&
-      existing.date === todayDate &&
-      existing.slot === slot &&
-      !["Cancelled","Missed"].includes(existing.status)
-    )
-  ), [machines, unitId, patient, sessions, session?.id, todayDate, slot]);
+  const rescheduleCandidate = {
+    date: todayDate, slot, slotType: slot === "Emergency" ? "emergency" : "normal",
+    emergencyTime, startTime: emergencyTime, duration: session?.duration || "4 hours",
+  };
+  const machineReason = (machine: Machine) => {
+    if (machine.unit !== unitId) return "Wrong unit";
+    if (machine.status === "maintenance") return "Under Maintenance";
+    if (machine.status === "disabled") return "Disabled";
+    if (!isMachineCompatible(patient, machine)) return `Incompatible · requires ${getRequiredCategory(patient)}`;
+    if (sessions.some(existing => existing.id !== session?.id && existing.machineId === machine.id &&
+      blocksReservation(existing) && appointmentsOverlap(existing, rescheduleCandidate))) return "Reserved";
+    if (!["available", "scheduled", "in-use"].includes(machine.status)) return "Unavailable";
+    return "Available";
+  };
+  const unitMachines = useMemo(() => machines.filter(machine => machine.unit === unitId),
+    [machines, unitId]);
   const patientConflict = sessions.some(existing =>
     existing.id !== session?.id &&
     existing.patientId === patient.id &&
-    existing.date === todayDate &&
-    existing.slot === slot &&
-    !["Cancelled","Missed"].includes(existing.status)
+    blocksReservation(existing) &&
+    appointmentsOverlap(existing, rescheduleCandidate)
   );
-  const selectedMachineAvailable = eligibleMachines.some(machine => machine.id === machineId);
+  const selectedMachine = machines.find(machine => machine.id === machineId);
+  const selectedMachineReason = selectedMachine ? machineReason(selectedMachine) : "Select a machine";
+  const selectedMachineAvailable = selectedMachineReason === "Available";
   const hasRescheduleChanges = Boolean(session && (
     machineId !== session.machineId || unitId !== session.unit ||
-    slot !== session.slot || session.date !== todayDate
+    slot !== session.slot || (slot === "Emergency" && emergencyTime !== (session.emergencyTime || session.startTime)) || session.date !== todayDate
   ));
 
   const saveReschedule = async () => {
-    if (!session || !selectedSlot || !canManageAppointment || !selectedMachineAvailable || patientConflict || saving) return;
+    if (savingFlight.current || !session || (slot !== "Emergency" && !selectedSlot) ||
+      (slot === "Emergency" && !emergencyTime) || !canManageAppointment || !selectedMachineAvailable || patientConflict || saving) return;
+    savingFlight.current = true;
     setSaving(true); setError(null);
     try {
       await onUpdate(session.id, {
@@ -2022,27 +2359,29 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
         unitId,
         date: todayDate,
         slot,
-        slotType: "normal",
-        emergencyTime: "",
-        startTime: selectedSlot.startFmt,
-        endTime: selectedSlot.endFmt,
-        duration: "4 hours",
+        slotType: slot === "Emergency" ? "emergency" : "normal",
+        emergencyTime: slot === "Emergency" ? emergencyTime : "",
+        startTime: slot === "Emergency" ? emergencyTime : selectedSlot!.startFmt,
+        endTime: slot === "Emergency" ? "" : selectedSlot!.endFmt,
+        duration: slot === "Emergency" ? (session.duration || "4 hours") : "4 hours",
       });
+      setSuccessMessage("Appointment rescheduled successfully.");
       setMode("details");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The appointment could not be rescheduled. Please try again.");
-    } finally { setSaving(false); }
+    } finally { savingFlight.current = false; setSaving(false); }
   };
 
   const cancelAppointment = async () => {
-    if (!session || !canManageAppointment || saving) return;
+    if (savingFlight.current || !session || !canManageAppointment || saving) return;
+    savingFlight.current = true;
     setSaving(true); setError(null);
     try {
       await onUpdate(session.id, { status: "cancelled" });
       onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The appointment could not be cancelled. Please try again.");
-    } finally { setSaving(false); }
+    } finally { savingFlight.current = false; setSaving(false); }
   };
 
   const selectedUnitName = units.find(unit => unit.id === (session?.unit ?? ""))?.name ?? session?.unit ?? "—";
@@ -2101,6 +2440,7 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                   ))}
                 </div>
               )}
+              {successMessage && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{successMessage}</p>}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <button type="button" onClick={onClose}
                   className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Close</button>
@@ -2110,15 +2450,16 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                     {selectedDate === todayDate ? "Assign Today" : "Assign for Selected Date"}
                   </button>
                 )}
-                {canManageAppointment && (
+                  {canManageAppointment && (
                   <>
                     <button type="button" onClick={() => { setError(null); setMode("cancel"); }}
                       className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50">Cancel Appointment</button>
                     <button type="button" onClick={() => {
                       setUnitId(session?.unit ?? "");
                       setMachineId(session?.machineId ?? "");
-                      setSlot(SLOTS.some(item => item.label === session?.slot) ? session!.slot : SLOTS[0].label);
-                      setError(null); setMode("reschedule");
+                      setSlot(session?.slot || SLOTS[0].label);
+                      setEmergencyTime(session?.emergencyTime || session?.startTime || "");
+                      setError(null); setSuccessMessage(""); setMode("reschedule");
                     }} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
                       Reschedule Appointment
                     </button>
@@ -2134,6 +2475,16 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
           {mode === "reschedule" && session && (
             <>
               <p className="text-sm text-slate-600">Change the unit, compatible machine, or time slot. The existing appointment record will be updated.</p>
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm text-violet-800">
+                Current appointment slot: <strong>{session.slot}</strong>. Prescription default is shown for reference only:{" "}
+                {prescriptionDefaultLoading ? "Loading…" : prescriptionDefaultError ? (
+                  <span role="alert">{prescriptionDefaultError}{" "}
+                    <button type="button" onClick={() => setPrescriptionDefaultRetry(value => value + 1)} className="font-semibold underline">Retry</button>
+                  </span>
+                ) : prescriptionDefault?.slot
+                  ? <strong>{prescriptionDefault.slot} · {prescriptionDefault.source}</strong>
+                  : `${prescriptionDefault?.issue === "unsupported" ? "Unsupported prescription slot" : "No prescribed slot"}${prescriptionDefault?.source ? ` · ${prescriptionDefault.source}` : ""}`}
+              </div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Appointment date
                 <input aria-label="Reschedule date" type="text" value={todayDate} readOnly
@@ -2151,19 +2502,35 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                 <select aria-label="Reschedule machine" value={machineId} onChange={event => setMachineId(event.target.value)}
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
                   <option value="">Select an available compatible machine</option>
-                  {eligibleMachines.map(machine => (
-                    <option key={machine.id} value={machine.id}>{machine.number} · {machine.category}</option>
-                  ))}
+                  {unitMachines.map(machine => {
+                    const reason = machineReason(machine);
+                    return <option key={machine.id} value={machine.id} disabled={reason !== "Available"}>
+                      {machine.number} · {machine.category}{reason === "Available" ? "" : ` · ${reason}`}
+                    </option>;
+                  })}
                 </select>
-                {eligibleMachines.length === 0 && <span className="mt-1 block text-xs text-red-700">No compatible machine is available for this slot in the selected unit.</span>}
+                <span className={`mt-1 block text-xs ${selectedMachineAvailable ? "text-emerald-700" : "text-red-700"}`}>
+                  {selectedMachine?.number || "Machine"}: {selectedMachineReason}.
+                  {selectedMachineReason === "Reserved" ? ` ${MACHINE_RESERVED_MESSAGE}` : ""}
+                </span>
+                {unitMachines.length === 0 && <span className="mt-1 block text-xs text-red-700">No machines are configured in the selected unit.</span>}
               </label>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Time slot
                 <select aria-label="Reschedule time slot" value={slot} onChange={event => setSlot(event.target.value)}
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                  {(session.slot === "Emergency" || session.slotType === "emergency") && <option value="Emergency">Emergency appointment</option>}
                   {SLOTS.map(item => <option key={item.label} value={item.label}>{item.label} · {item.startFmt}–{item.endFmt}</option>)}
                 </select>
               </label>
+              {slot === "Emergency" && (
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Emergency appointment time
+                  <input aria-label="Reschedule emergency time" type="time" value={emergencyTime}
+                    onChange={event => setEmergencyTime(event.target.value)}
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" />
+                </label>
+              )}
               {patientConflict && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">This patient already has an appointment in that slot today.</p>}
               {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

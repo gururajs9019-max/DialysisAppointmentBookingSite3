@@ -26,7 +26,7 @@ export function staffServices(ctx) {
       const patientId = url.searchParams.get("patientId");
       const [doctors, prescriptions] = await Promise.all([
         pool.query("SELECT id,name FROM portal_users WHERE role='doctor' AND status='Active' ORDER BY name,id"),
-        pool.query("SELECT id,version,data->>'diagnosis' diagnosis FROM prescriptions WHERE patient_id=$1 AND status<>'Discontinued' ORDER BY updated_at DESC,id", [patientId]),
+        pool.query("SELECT id,version,data->>'diagnosis' diagnosis,data->'dialysisRx'->>'slot' AS \"prescribedSlot\" FROM prescriptions WHERE patient_id=$1 AND status<>'Discontinued' ORDER BY updated_at DESC,id", [patientId]),
       ]);
       sendJson(res,200,{doctors:doctors.rows,prescriptions:prescriptions.rows}); return true;
     }

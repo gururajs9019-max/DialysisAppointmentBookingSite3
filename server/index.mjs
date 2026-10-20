@@ -10,6 +10,7 @@ import { withRequestErrorBoundary } from "./request-error-boundary.mjs";
 import { apiErrorResponse, httpError } from "./api-errors.mjs";
 import { readJson } from "./request-body.mjs";
 import { notifyPrescription } from "./prescription-notifications.mjs";
+import { assertSessionAvailable, validateSessionTime } from "./session-availability.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 5000);
@@ -152,22 +153,23 @@ async function fetchPatient(client, id) {
 }
 async function createSession(input, actor) {
   object(input); const patientId = text(input.patientId, "patientId", { required: true, max: 100 }), machineId = text(input.machineId, "machineId", { required: true, max: 100 }), unitId = text(input.unitId, "unitId", { required: true, max: 100 });
-  const date = text(input.date, "date", { required: true, max: 10 }), slot = text(input.slot, "slot", { required: true, max: 80 });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw httpError(400, "date must be YYYY-MM-DD.");
+  const date = dateOnly(text(input.date, "date", { required: true, max: 10 }), "date"), slot = text(input.slot, "slot", { required: true, max: 80 });
+  validateSessionTime({ ...input, date, slot });
   return transaction(async client => {
     await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE",[patientId]);
     const patient = await fetchPatient(client, patientId);
     if (patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be scheduled.");
     const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 AND unit_id=$2 FOR UPDATE", [machineId, unitId])).rows[0];
     if (!machine) throw httpError(400, "Machine does not belong to the selected unit.");
-    if (!["available", "scheduled", "in-use"].includes(machine.status)) throw httpError(409, "Machine is unavailable.");
+    if (!["available", "scheduled", "in-use"].includes(machine.status)) throw httpError(409, machine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");
     if (!compatibleMachine(patient.viral_category, machine.category)) throw httpError(409, "Machine is not compatible with the patient's viral category.");
     if (input.status && !SESSION_STATUSES.includes(input.status)) throw httpError(400, "Invalid session status.");
     const links = await validateSessionLinks(client, input, patientId, { text, httpError });
     const id = randomUUID(), status = input.status || "scheduled";
+    await assertSessionAvailable(client, { ...input, patientId, machineId, date, slot, status });
     try { await client.query("INSERT INTO dialysis_sessions(id,patient_id,machine_id,unit_id,session_date,slot,status,data,created_by,doctor_id,prescription_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", [id, patientId, machineId, unitId, date, slot, status, { ...input, ...links, date, slot }, actor.id, links.doctorId, links.prescriptionId]); }
     catch (e) { if (e.code === "23505") throw httpError(409, "Patient or machine is already booked for this date and slot."); throw e; }
-    await client.query("UPDATE dialysis_machines SET status='scheduled', updated_at=now() WHERE id=$1", [machineId]);
+    await recalculateMachineAvailability(client, machineId);
     await audit(client, actor, "session.create", "session", id, { patientId, machineId, date, slot });
     await notifyRole(client, actor, actor.role === "doctor" ? "admin" : "doctor", "info", "Dialysis session scheduled", `${patient.data.name} (${patient.uhid}) was scheduled for ${date}, ${slot}.`);
     return sessionDto((await client.query("SELECT s.*,p.uhid,p.data AS patient_data,m.code,m.name AS machine_name,u.name AS unit_name FROM dialysis_sessions s JOIN patients p ON p.id=s.patient_id JOIN dialysis_machines m ON m.id=s.machine_id JOIN dialysis_units u ON u.id=s.unit_id WHERE s.id=$1", [id])).rows[0]);
@@ -386,8 +388,9 @@ export async function api(req, res, url) {
           )).rows;
           const targetMachine = lockedMachines.find(machine => machine.id === x.machineId);
           if (!targetMachine || targetMachine.unit_id !== x.unitId) throw httpError(400, "Machine does not belong to the selected unit.");
-          if (!["available","scheduled","in-use"].includes(targetMachine.status)) throw httpError(409, "Machine is unavailable.");
+          if (!["available","scheduled","in-use"].includes(targetMachine.status)) throw httpError(409, targetMachine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");
           if (!compatibleMachine(patient.viral_category, targetMachine.category)) throw httpError(409, "Machine is not compatible with the patient's viral category.");
+          await assertSessionAvailable(client, { ...existing.data, ...x, patientId: existing.patient_id }, id);
           try {
             await client.query(
               "UPDATE dialysis_sessions SET machine_id=$2,unit_id=$3,session_date=$4,slot=$5,status=$6,data=data || $7::jsonb,updated_at=now() WHERE id=$1",
@@ -399,8 +402,19 @@ export async function api(req, res, url) {
           }
         } else {
           if(["scheduled","waiting","called","running"].includes(x.status)) {
-            const patient=await fetchPatient(client,existing.patient_id);
+            const patient=(await client.query("SELECT * FROM patients WHERE id=$1 FOR UPDATE", [existing.patient_id])).rows[0];
             if(patient.lifecycle!=="Active") throw httpError(409,"Inactive patients cannot have active sessions.");
+          }
+          if (!["cancelled", "missed"].includes(x.status)) {
+            await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE", [existing.patient_id]);
+            const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 FOR UPDATE", [existing.machine_id])).rows[0];
+            if (["scheduled","waiting","called","running"].includes(x.status) && !["available","scheduled","in-use"].includes(machine.status)) {
+              throw httpError(409, machine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");
+            }
+            await assertSessionAvailable(client, {
+              ...existing.data, ...x, patientId: existing.patient_id, machineId: existing.machine_id,
+              date: dateKey(existing.session_date), slot: existing.slot,
+            }, id);
           }
           await client.query("UPDATE dialysis_sessions SET status=$2,data=data || $3::jsonb,updated_at=now() WHERE id=$1", [id,x.status,x]);
         }
