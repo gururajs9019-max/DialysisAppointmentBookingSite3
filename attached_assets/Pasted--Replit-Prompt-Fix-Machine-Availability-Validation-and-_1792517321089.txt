@@ -1,0 +1,233 @@
+# Replit Prompt: Fix Machine Availability Validation and Prescription-Based Slot Selection
+
+I want to improve the existing Dialysis Slot Manager application, specifically the Administrator Portal's **Today's Dialysis → Assign and Reschedule Appointment** workflows.
+
+Before making changes, inspect the existing code, dialysis prescription data, appointment database schema, machine management logic, and scheduling validation.
+
+Implement the following changes in the existing application. Do not rebuild the application or modify unrelated functionality.
+
+## 1. Automatically Select the Time Slot from the Dialysis Prescription
+
+When the administrator assigns a dialysis appointment to a patient, the time slot should be automatically preselected according to that patient's existing dialysis prescription or prescribed schedule.
+
+The available time slots are:
+
+- 8 AM – 12 PM
+- 12 PM – 4 PM
+- 4 PM – 8 PM
+
+### Expected behavior
+
+1. Fetch the patient's existing prescribed dialysis time slot from the database.
+2. Automatically select that slot when the assignment form opens.
+3. Display the selected slot clearly in the form.
+4. Allow the administrator to change the preselected slot if necessary.
+5. If the administrator changes the slot, validate the newly selected slot against the availability of the selected machine.
+6. Do not silently overwrite the patient's prescribed slot in their medical records when changing the appointment slot.
+7. If the patient does not have a prescription or prescribed time slot, require the administrator to select a slot manually.
+
+**Important:** Use the actual prescription field and existing database structure. Do not assume a prescription field exists under a particular name without inspecting the code.
+
+If the existing prescription contains a time outside the three supported slots, handle it explicitly instead of silently selecting an incorrect slot.
+
+## 2. Check Machine Availability During Normal Scheduling
+
+When assigning a machine to a patient, the application must verify that the selected machine is available for the selected date and time slot.
+
+A machine must not be assigned to two patients for overlapping dialysis sessions.
+
+### Validation rules
+
+Before confirming an assignment, check:
+
+- Selected dialysis unit.
+- Selected machine.
+- Selected appointment date.
+- Selected time slot.
+- Whether the machine is active and available.
+- Whether the machine is under maintenance or disabled.
+- Whether another patient has an existing appointment that conflicts with the selected machine, date, and time.
+
+If the machine is already reserved for the selected slot, reject the assignment and show a clear message:
+
+"This machine is already reserved for the selected time slot. Please select another available machine or time slot."
+
+Do not save the appointment when a conflict exists.
+
+### Machine availability display
+
+When possible, display the availability status next to each machine:
+
+- Available
+- Reserved
+- Under Maintenance
+
+Update the machine list whenever the administrator changes the unit, date, or time slot.
+
+Only allow an assignment when the selected machine is eligible and available.
+
+## 3. Validate Machine Availability During Rescheduling
+
+Apply the same availability checks when the administrator clicks a patient's name in Today's Dialysis and chooses **Reschedule Appointment**.
+
+When the rescheduling form opens:
+
+1. Load the patient's existing appointment details.
+2. Preselect the currently assigned unit, machine, and time slot.
+3. Allow the administrator to change the time slot or machine.
+4. Recheck availability whenever the machine, date, or time slot changes.
+5. Validate availability again when the administrator submits the rescheduling form.
+6. Save the changes only if the new appointment is valid.
+
+### Important: Exclude the Current Appointment
+
+When checking availability during rescheduling, exclude the appointment currently being edited from the conflict check.
+
+For example:
+
+- Patient A is assigned to Machine 1 from 8 AM to 12 PM.
+- The administrator opens Patient A's rescheduling form.
+- Machine 1 and 8 AM–12 PM are already selected.
+- The application must not incorrectly report that Machine 1 is unavailable because of Patient A's own existing appointment.
+
+However, if Patient B already has a conflicting appointment on Machine 1 for that slot, the application must prevent Patient A from being rescheduled to that same machine and slot.
+
+Do not cancel or delete the original appointment before validating the replacement. If the new assignment fails, preserve the original appointment unchanged.
+
+## 4. Handle Changes to the Selected Time Slot
+
+When the administrator changes the time slot from the prescription-based default:
+
+- Update the selected slot in the assignment form.
+- Recheck the availability of the currently selected machine.
+- If the machine is reserved for the newly selected slot, display an immediate warning.
+- Disable the final confirmation button while the selection is invalid.
+- Allow the administrator to choose another machine or another time slot.
+- Do not reset the selected slot to the prescription default every time the form updates or re-renders.
+
+If the administrator changes the unit, refresh the machine options to show only machines belonging to that unit.
+
+If the selected machine becomes invalid because of a unit or slot change, clear that selection or require the administrator to choose a valid replacement.
+
+## 5. Prevent Double Booking and Race Conditions
+
+Frontend validation alone is not sufficient.
+
+Two administrators might attempt to reserve the same machine for the same slot at nearly the same time.
+
+Implement the strongest appropriate protection supported by the existing database and backend architecture.
+
+Requirements:
+
+- Check availability on the backend before saving.
+- Prevent conflicting assignments from being committed concurrently.
+- Use a database transaction, locking, exclusion constraint, or equivalent atomic protection where supported.
+- Handle database conflicts by returning a meaningful error to the frontend.
+- Never show a successful assignment message if the save fails.
+- Disable the submit button while a scheduling operation is in progress.
+- Prevent repeated clicks from creating duplicate appointments.
+
+The conflict check must use actual database records, not only the machine status displayed in the frontend.
+
+## 6. Appointment Status and Cancelled Bookings
+
+Consider existing appointment statuses when checking availability.
+
+- Active, assigned, or confirmed appointments must block conflicting reservations as appropriate to the existing workflow.
+- Cancelled appointments must not block a machine slot.
+- Completed or historical appointments must be handled according to their actual session date and existing scheduling rules.
+- A machine under maintenance must remain unavailable even if no appointment is booked.
+
+Do not introduce incompatible appointment status values. Reuse the existing status conventions after inspecting the code.
+
+## 7. Preserve Existing Unit and Machine Configuration
+
+The application currently has two units:
+
+**Unit 1:** 29 machines.
+
+**Unit 2:** 7 machines.
+
+Use the actual machine records and types already stored in the database. Administrators may add machines or expand the machine inventory in the future, so do not hardcode a fixed machine list.
+
+Preserve existing machine compatibility rules, including viral-status restrictions where implemented.
+
+Do not allow:
+- Assignment to a machine in the wrong unit.
+- Assignment to a disabled or maintenance machine.
+- Double booking of a machine.
+- Assignment to a machine that does not satisfy the application's existing compatibility rules.
+
+## 8. User Interface Requirements
+
+Keep the existing Administrator Portal design and styling.
+
+In the Assign and Reschedule forms, clearly show:
+
+- Patient name.
+- Appointment date.
+- Selected unit.
+- Selected machine.
+- Prescription-based default time slot.
+- Current machine availability.
+- Any validation or conflict messages.
+
+Use the existing time-slot options:
+
+- 8 AM – 12 PM
+- 12 PM – 4 PM
+- 4 PM – 8 PM
+
+The administrator must be able to change the default time slot before confirming an assignment.
+
+Display useful feedback, such as:
+
+- "Default slot loaded from dialysis prescription."
+- "Machine available for this slot."
+- "Machine already reserved for this slot."
+- "Machine is under maintenance."
+- "Appointment rescheduled successfully."
+
+Only show success messages after the database confirms the operation.
+
+## 9. Scope Restrictions
+
+Modify only the necessary components, APIs, and database logic related to scheduling and rescheduling in the Administrator Portal.
+
+Do not:
+
+- Redesign the entire application.
+- Modify the Patient Portal or Doctor Portal.
+- Delete existing patient records or dialysis history.
+- Modify the patient's medical prescription when only an appointment slot is changed.
+- Create duplicate machine, appointment, or prescription tables.
+- Replace the existing database with mock data.
+- Remove future appointment scheduling functionality.
+- Break the existing Assign, Reschedule, Cancel, or machine maintenance features.
+
+## 10. Test All Scenarios
+
+After implementation, verify these cases:
+
+1. A patient with a prescribed slot opens the assignment form, and the correct slot is selected automatically.
+2. The administrator can change the default slot.
+3. A patient without a prescribed slot must have a slot selected manually.
+4. An available machine can be assigned successfully.
+5. A machine reserved by another patient for the same slot cannot be assigned.
+6. The same machine can be assigned to different patients in non-conflicting slots.
+7. Rescheduling checks availability before saving.
+8. A patient's existing appointment does not conflict with itself during rescheduling.
+9. A conflicting appointment belonging to another patient prevents rescheduling.
+10. A failed rescheduling operation preserves the original appointment.
+11. Cancelled appointments no longer block availability.
+12. Machines under maintenance cannot be assigned.
+13. Changing the unit refreshes the available machine options.
+14. Concurrent assignment attempts cannot create conflicting reservations.
+15. Assignment and rescheduling continue to work after refreshing the page.
+16. Patient and Doctor Portals remain unaffected.
+
+## Final Instruction
+
+Inspect the existing implementation first. Identify the current source of the patient's prescribed slot and the existing machine availability logic. Then implement and test the complete workflow.
+
+Do not apply a frontend-only fix. Prescription-based slot selection, machine availability checks, and double-booking prevention must work with the actual backend and database.
