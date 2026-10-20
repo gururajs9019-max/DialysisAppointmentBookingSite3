@@ -1,0 +1,163 @@
+# Bug Fix: Patient Schedule Assignment Not Saving in Dialysis Slot Manager
+
+Fix an existing bug in my Dialysis Slot Manager application.
+
+## 1. Problem Description
+
+In the Administrator Portal, there is a **Today's Dialysis Patient List**. When I assign a dialysis schedule to a patient who appears in this list, the patient does not get assigned successfully.
+
+Even after I attempt to assign the schedule, the **Assign** button remains visible and available for the same patient.
+
+This suggests that the assignment may not be saving correctly to the database, the patient list is not refreshing, or the application is not recognizing the existing assignment.
+
+Investigate and fix the root cause instead of applying only a visual workaround.
+
+## 2. Expected Assignment Behavior
+
+When the administrator assigns a dialysis schedule to a patient in Today's Dialysis Patient List:
+
+1. Validate the selected patient, unit, dialysis machine, date, and time slot.
+2. Save the assignment successfully to the existing database.
+3. Associate the schedule with the correct patient.
+4. Store the correct unit, machine, dialysis date, and time slot.
+5. Update the patient's assignment status immediately after successful saving.
+6. Refresh or update Today's Dialysis Patient List so it reflects the latest assignment.
+7. Remove or disable the Assign button for that patient and schedule once the assignment is successful.
+8. Display a confirmation message such as "Dialysis schedule assigned successfully."
+
+The administrator must not need to refresh the entire website manually to see the updated assignment status.
+
+## 3. Prevent Duplicate Assignments
+
+Implement proper duplicate-assignment prevention.
+
+Before creating a new assignment, check whether the patient already has a valid assignment for the same dialysis date and relevant schedule.
+
+- If the patient is already assigned to the same date and slot, do not create another duplicate assignment.
+- If the patient is already assigned to a different slot on the same date, follow the application's existing scheduling rules and clearly indicate the existing assignment.
+- If the administrator needs to change an existing assignment, provide an appropriate rescheduling or reassignment flow rather than creating a duplicate.
+- Do not block legitimate future appointments or valid recurring dialysis schedules.
+
+Use the database as the source of truth. Do not rely exclusively on frontend state to determine whether a patient has been assigned.
+
+## 4. Fix the Assign Button State
+
+The Assign button must reflect the actual assignment status.
+
+**Before assignment:**
+- Show the Assign button when the patient is eligible and has no conflicting assignment.
+
+**During assignment:**
+- Disable the button.
+- Show a loading state such as "Assigning...".
+- Prevent multiple submissions from repeated clicks.
+
+**After successful assignment:**
+- Update the patient row immediately.
+- Hide or disable the Assign button for that completed assignment.
+- Display an appropriate status such as "Assigned".
+- Ensure the assignment remains recorded after refreshing the page or reopening the portal.
+
+**If assignment fails:**
+- Do not mark the patient as assigned.
+- Keep the Assign option available if the patient is still eligible.
+- Display a meaningful error message explaining the failure.
+- Allow the administrator to retry.
+
+Do not hide the button merely because it was clicked. Hide or disable it only after the database confirms a successful assignment.
+
+## 5. Investigate the Backend and Database
+
+Before changing the code, inspect the existing project and identify:
+
+- The component that displays Today's Dialysis Patient List.
+- The Assign button's click handler.
+- The schedule-assignment function or API.
+- The existing database tables and relationships for patients, schedules, machines, units, and appointments.
+- Any authentication or database permission policies that might prevent assignments from saving.
+- Any frontend query caching or stale state that might prevent the list from updating.
+
+Check whether the assignment request is failing, whether the database write is rejected, or whether the write succeeds but the UI does not refresh.
+
+Use the existing database schema and backend architecture. Do not create duplicate tables or a second assignment system.
+
+Fix the actual cause of the problem.
+
+## 6. Preserve Existing Dialysis Scheduling Rules
+
+The application has two dialysis units:
+
+**Unit 1**
+- 29 machines.
+
+**Unit 2**
+- 7 machines.
+
+Machine availability, machine type, unit selection, and maintenance status must continue to work according to the existing implementation.
+
+The available time slots are:
+- 8 AM–12 PM
+- 12 PM–4 PM
+- 4 PM–8 PM
+
+When assigning a schedule:
+- Respect the selected unit.
+- Respect the selected machine.
+- Do not assign a disabled or maintenance machine.
+- Prevent conflicting bookings for the same machine, date, and time slot.
+- Respect existing patient eligibility and viral-status/machine compatibility rules, if implemented.
+- Do not overwrite another patient's schedule.
+
+Use the actual machine records in the database. Do not hardcode machine availability or create new machines to work around the bug.
+
+## 7. Data Consistency and Error Handling
+
+Ensure that the assignment is saved reliably.
+
+- Use the existing backend/API and authentication.
+- Handle database errors and permission failures explicitly.
+- Avoid reporting success before the database confirms the write.
+- If multiple database operations are required, use an appropriate transaction or safe server-side workflow where supported.
+- Prevent duplicate submissions and race-condition-related duplicate assignments.
+- Update the UI only after the operation succeeds, or use a safe optimistic update with rollback on failure.
+
+Do not silently swallow errors.
+
+## 8. Scope Restrictions
+
+This is an existing three-portal application.
+
+Modify only the code necessary to fix the administrator's dialysis schedule assignment workflow.
+
+Do not:
+- Redesign the application.
+- Rebuild the Administrator Portal.
+- Modify the Patient Portal or Doctor Portal.
+- Change the authentication system unnecessarily.
+- Delete existing patients, schedules, medical information, or machine records.
+- Change unrelated database tables or scheduling functionality.
+- Replace real database operations with mock data.
+- Use hardcoded assignments or placeholder success messages.
+
+Preserve all existing functionality.
+
+## 9. Testing Requirements
+
+After implementing the fix, test these scenarios:
+
+1. Assign a schedule to a patient in Today's Dialysis Patient List.
+2. Verify that the assignment is saved in the database.
+3. Verify that the patient's status changes to Assigned.
+4. Verify that the Assign button is hidden or disabled for the completed assignment.
+5. Refresh the page and confirm that the assignment remains visible.
+6. Attempt to assign the same patient to the same slot again and confirm that no duplicate is created.
+7. Attempt a conflicting machine booking and confirm that it is rejected.
+8. Simulate a database or network failure and confirm that the application displays an error without falsely marking the patient as assigned.
+9. Verify that valid future appointments can still be created.
+10. Confirm that the Patient Portal and Doctor Portal continue to work normally.
+
+## Final Instruction
+
+First inspect the existing code, database schema, and assignment workflow. Identify the root cause, implement the smallest reliable fix, and test the entire assignment flow.
+
+Do not simply change the Assign button's appearance. The patient must actually be assigned in the database, and the interface must correctly reflect the saved assignment.
