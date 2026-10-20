@@ -414,8 +414,12 @@ export const updateSession = async (id: string, payload: SessionUpdatePayload) =
     machine: result.machine ? asMachine(result.machine) : undefined,
   };
 };
-export const createSession = (session: { patientId: string; machineId: string; unitId: string; date: string; slot: string; status?: string; [key: string]: unknown }) =>
-  request<{ session: { id: string } }>("/api/sessions", { method: "POST", body: JSON.stringify(session) }, "save");
+export const createSession = async (session: { patientId: string; machineId: string; unitId: string; date: string; slot: string; status?: string; [key: string]: unknown }) => {
+  const result = await request<{ session: Record<string, unknown> }>(
+    "/api/sessions", { method: "POST", body: JSON.stringify(session) }, "save",
+  );
+  return { session: asSession(result.session) };
+};
 export const markNotificationRead = (id: string, read: boolean) =>
   request<{ notification: StaffNotification }>(`/api/notifications/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ read }) }, "save");
 

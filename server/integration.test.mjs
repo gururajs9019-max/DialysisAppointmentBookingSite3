@@ -152,9 +152,34 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
       "the assignment date survives background refresh");
     await page.getByRole("main").getByRole("button", { name: "Assign Patient", exact: true }).click();
     await page.getByRole("heading", { name: "Confirm Assignment" }).waitFor();
-    const assignmentResponse = page.waitForResponse(response =>
+    let failFirstAssignment = true;
+    await page.route("**/api/sessions", async route => {
+      if (route.request().method() === "POST" && failFirstAssignment) {
+        failFirstAssignment = false;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Synthetic network failure. Retry the assignment." }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    const failedAssignmentResponse = page.waitForResponse(response =>
       new URL(response.url()).pathname === "/api/sessions" && response.request().method() === "POST");
     page.on("dialog", dialog => dialog.dismiss());
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    const failedAssignment = await failedAssignmentResponse;
+    assert.equal(failedAssignment.status(), 503, "a simulated network failure must be surfaced");
+    await page.getByRole("alert").getByText(/Synthetic network failure/).waitFor();
+    assert.equal(await page.getByRole("heading", { name: "Confirm Assignment" }).isVisible(), true,
+      "a failed request must keep the assignment draft available for retry");
+    assert.equal(await page.getByRole("heading", { name: "Assignment Confirmed" }).count(), 0,
+      "a failed request must not report a saved assignment");
+    assert.equal(await page.getByRole("button", { name: "Confirm", exact: true }).isEnabled(), true,
+      "the administrator can retry after a failure");
+    const assignmentResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/sessions" && response.request().method() === "POST");
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     const savedAssignment = await assignmentResponse;
     const assignmentResult = await savedAssignment.json();
@@ -166,6 +191,25 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
     assert.equal(await assignedMachineCard.getByText("Reserved", { exact: true }).isVisible(), true, "assigned machine should show scheduled status without a refresh");
     assert.equal(await assignedMachineCard.getByText(patient.name, { exact: true }).isVisible(), true, "assigned machine should show its next patient without a refresh");
     assert.equal(await assignedMachineCard.getByRole("button", { name: "Assign Patient", exact: true }).count(), 0, "scheduled machine must not be offered as available");
+
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.locator('input[type="date"]').fill(assignmentDate);
+    const dailyPatientRow = page.getByText(patient.uhid, { exact: true }).locator("xpath=../../../..");
+    await dailyPatientRow.getByText("Waiting", { exact: true }).waitFor();
+    assert.equal(await dailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
+      "the daily patient list must reflect the saved YYYY-MM-DD session and hide Assign");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    await page.locator('input[type="date"]').fill(assignmentDate);
+    const refreshedDailyPatientRow = page.getByText(patient.uhid, { exact: true }).locator("xpath=../../../..");
+    await refreshedDailyPatientRow.getByText("Waiting", { exact: true }).waitFor();
+    assert.equal(await refreshedDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
+      "the assignment remains visible and cannot be assigned again after a full page reload");
 
     await page.getByRole("button", { name: "Dashboard", exact: true }).click();
     await page.route(`${baseUrl}/api/patients/${encodeURIComponent(patient.id)}`, route => route.fulfill({
@@ -272,12 +316,15 @@ try {
   const admin = await login("admin", process.env.STAFF_ADMIN_PASSWORD);
   const doctor = await login("doctor", process.env.STAFF_DOCTOR_PASSWORD);
   const today = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date());
+  const browserAssignmentDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const browserAssignmentDay = new Intl.DateTimeFormat("en-US", { weekday: "long" })
+    .format(new Date(`${browserAssignmentDate}T12:00:00`));
 
   const primary = await expectStatus(request("/api/patients", {
     method: "POST", cookie: admin,
     body: {
       uhid: `${run}-NEG`, name: `${run} Negative Patient`, viralStatus: { hepatitisB: "Negative", hepatitisC: "Negative", hiv: "Negative" },
-      dialysisDays: [today], dialysisDaysPerWeek: 1,
+       dialysisDays: [today, browserAssignmentDay], dialysisDaysPerWeek: 2,
       medicalInfo: { dialysisAccess: "AV Fistula", opdIpd: "OPD" },
       investigations: { cbc: { hemoglobin: "10.4 g/dL" }, serumFerritin: "280 ng/mL" },
     },
@@ -314,7 +361,6 @@ try {
   const negativeMachine = await createMachine("NEG-1", "Negative");
   const secondNegativeMachine = await createMachine("NEG-2", "Negative");
   const hcvMachine = await createMachine("HCV", "HCV");
-  const browserAssignmentDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   await runBrowserPatientHandoffTest(primary.patient, negativeMachine.code, browserAssignmentDate);
   const browserSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-created sessions should be readable");
   const browserSession = browserSessions.sessions.find(item =>
@@ -322,6 +368,14 @@ try {
   );
   assert.ok(browserSession, "browser assignment must persist a session");
   ids.sessions.push(browserSession.id);
+  await expectStatus(request("/api/sessions", {
+    method: "POST", cookie: admin,
+    body: { patientId: primary.patient.id, machineId: negativeMachine.id, unitId: "U1", date: browserAssignmentDate, slot: "Slot 1" },
+  }), 409, "the same patient and slot cannot be assigned twice");
+  await expectStatus(request("/api/sessions", {
+    method: "POST", cookie: admin,
+    body: { patientId: second.patient.id, machineId: negativeMachine.id, unitId: "U1", date: browserAssignmentDate, slot: "Slot 1" },
+  }), 409, "a machine cannot be double-booked for the same date and slot");
   const outcomeMachine = await createMachine("OUTCOME", "Negative");
   const todayDate = new Date().toISOString().slice(0, 10);
   const outcomeSession = await expectStatus(request("/api/sessions", {

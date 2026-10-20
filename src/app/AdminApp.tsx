@@ -8,6 +8,7 @@ import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor"
 import { ScheduleClinicalLinks, type ScheduleLinks } from "./components/admin/ScheduleClinicalLinks";
 import { logoutStaff } from "./lib/appointmentApi";
 import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { localDateKey } from "./lib/scheduleDateMapping.mjs";
 import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
 import {
@@ -1084,9 +1085,10 @@ function Step4Schedule({ draft, onChange, validation, units }: {
 
 // ─── Confirmation Dialog ──────────────────────────────────────────────────────
 
-function ConfirmationDialog({ draft, validation, onConfirm, onCancel }: {
+function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitting, submissionError }: {
   draft: AssignmentDraft; validation: ValidationResult;
   onConfirm: () => void; onCancel: () => void;
+  isSubmitting: boolean; submissionError: string | null;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1123,13 +1125,19 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel }: {
               ))}
             </div>
           )}
+          {submissionError && (
+            <div role="alert" className="flex gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              <span>{submissionError} You can retry without creating a duplicate.</span>
+            </div>
+          )}
         </div>
         <div className="flex gap-3 px-6 pb-6">
-          <button onClick={onCancel} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium">
+          <button onClick={onCancel} disabled={isSubmitting} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50 font-medium disabled:opacity-50">
             Cancel
           </button>
-          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 shadow-lg shadow-violet-200">
-            Confirm
+          <button onClick={onConfirm} disabled={isSubmitting} className="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 disabled:cursor-wait disabled:opacity-60">
+            {isSubmitting ? "Saving…" : "Confirm"}
           </button>
         </div>
       </div>
@@ -1153,12 +1161,15 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
   // Patient-ID preselection is resolved asynchronously, so start on the
   // patient-safe step while the fetch is in flight.
   const [step, setStep] = useState<AssignStep>(1);
+  const submissionInFlight = useRef(false);
   const [draft, setDraft] = useState<AssignmentDraft>({
     patient: null, unit: prefillUnit, machine: prefillMachine ?? null,
     slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: "",
     slotType: "", emergencyTime: "",
   });
   const [showConfirm, setShowConfirm] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [prefillLoading, setPrefillLoading] = useState(Boolean(prefillPatientId));
   const [prefillError, setPrefillError] = useState<string | null>(null);
 
@@ -1209,6 +1220,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
   };
 
   const handleConfirm = async () => {
+    if (submissionInFlight.current) return;
     const newSession: DialysisSession = {
       id: `S${Date.now()}`,
       patientId: draft.patient!.id,
@@ -1230,8 +1242,12 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       slotType: draft.slotType as "normal" | "emergency",
       emergencyTime: draft.slotType === "emergency" ? draft.emergencyTime : undefined,
     };
+    submissionInFlight.current = true;
+    setIsSubmitting(true);
+    setSubmissionError(null);
     try { await onAssigned(newSession, draft.machine!.id); setShowConfirm(false); setStep("success"); }
-    catch (error) { window.alert(error instanceof Error ? error.message : "Assignment could not be saved."); }
+    catch (error) { setSubmissionError(error instanceof Error ? error.message : "Assignment could not be saved. Check your connection and try again."); }
+    finally { submissionInFlight.current = false; setIsSubmitting(false); }
   };
 
   if (step === "success") {
@@ -1379,7 +1395,8 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
 
       {showConfirm && (
         <ConfirmationDialog draft={draft} validation={validation}
-          onConfirm={handleConfirm} onCancel={() => setShowConfirm(false)} />
+          onConfirm={handleConfirm} onCancel={() => { if (!isSubmitting) setShowConfirm(false); }}
+          isSubmitting={isSubmitting} submissionError={submissionError} />
       )}
     </div>
   );
@@ -1942,10 +1959,11 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
   units: DialysisUnit[];
   onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => void;
 }) {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
+  const todayDate = localDateKey(new Date());
+  const [selectedDate, setSelectedDate] = useState(todayDate);
 
   const viewDay = WEEK_DAYS_FULL[new Date(selectedDate + "T12:00:00").getDay()];
-  const isToday = selectedDate === new Date().toISOString().split("T")[0];
+  const isToday = selectedDate === todayDate;
 
   // Patients scheduled for the selected day (active only, has dialysisDays set)
   const scheduledPatients = useMemo(() =>
@@ -1956,15 +1974,18 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
     [patients, viewDay]
   );
 
-  // Map patientId → their session on "Today" date
+  // Persisted sessions use YYYY-MM-DD; "Today" is retained only for demo records.
+  // Match the date selected in this list so a saved assignment remains visible.
   const todaySessionMap = useMemo(() => {
     const map: Record<string, DialysisSession> = {};
-    sessions.filter(s => s.date === "Today").forEach(s => { map[s.patientId] = s; });
+    sessions
+      .filter(s => s.date === selectedDate || (isToday && s.date === "Today"))
+      .forEach(s => { map[s.patientId] = s; });
     return map;
-  }, [sessions]);
+  }, [sessions, selectedDate, isToday]);
 
   const activePatients  = patients.filter(p => p.treatmentStatus === "Active");
-  const todaySessions   = sessions.filter(s => s.date === "Today");
+  const todaySessions   = sessions.filter(s => s.date === todayDate || s.date === "Today");
   const runningNow      = sessions.filter(s => s.status === "Running");
   const availableMachines = machines.filter(m => m.status === "available");
   const maintenanceMachines = machines.filter(m => m.status === "maintenance" || m.status === "disabled");
@@ -1996,7 +2017,7 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {units.map(u => {
           const um = machines.filter(m => m.unit === u.id);
-          const us = sessions.filter(s => s.unit === u.id && s.date === "Today");
+          const us = sessions.filter(s => s.unit === u.id && (s.date === todayDate || s.date === "Today"));
           const uAvail  = um.filter(m => m.status === "available").length;
           const uInUse  = um.filter(m => m.status === "in-use").length;
           const uMaint  = um.filter(m => m.status === "maintenance").length;
@@ -2066,7 +2087,7 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
                 className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white"
               />
               {!isToday && (
-                <button onClick={() => setSelectedDate(new Date().toISOString().split("T")[0])}
+                <button onClick={() => setSelectedDate(todayDate)}
                   className="px-3 py-1.5 text-xs bg-violet-50 text-violet-700 border border-violet-200 rounded-lg hover:bg-violet-100 font-medium">
                   Jump to Today
                 </button>
@@ -5391,13 +5412,14 @@ export default function AdminApp({
       startTime: session.startTime, endTime: session.endTime, slotType: session.slotType,
       emergencyTime: session.emergencyTime,
     });
-    setSessions(prev => [{ ...session, id: created.session.id }, ...prev]);
-    setMachines(prev => prev.map(machine => machine.id === session.machineId
+    const savedSession = created.session;
+    setSessions(prev => [savedSession, ...prev.filter(existing => existing.id !== savedSession.id)]);
+    setMachines(prev => prev.map(machine => machine.id === savedSession.machineId
       ? {
           ...machine,
           status: "scheduled",
-          nextPatient: session.patientName,
-          nextAvailableTime: `${session.date} · ${session.slot}`,
+          nextPatient: savedSession.patientName,
+          nextAvailableTime: `${savedSession.date} · ${savedSession.slot}`,
         }
       : machine));
   };
