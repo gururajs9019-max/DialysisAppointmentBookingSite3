@@ -41,14 +41,17 @@ export async function verifySchedulingLinksInBrowser({ base, patient, unit, mach
     assert.equal(persisted.prescriptionId, rx.id);
     await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
     await page.getByLabel("Schedule date", { exact: true }).fill(date);
-    const card = page.getByRole("button").filter({ has: page.getByText(patient.name, { exact: true }) }).filter({ hasText: "Slot 3" });
-    await card.click();
+    const cardForStatus = status => page.getByRole("button")
+      .filter({ has: page.getByText(patient.name, { exact: true }) })
+      .filter({ hasText: "Slot 3" })
+      .filter({ hasText: status });
+    await cardForStatus("Waiting").click();
     await page.getByRole("button", { name: "Call Patient", exact: true }).click();
     await expect(page.getByRole("button", { name: "Start Treatment", exact: true })).toBeVisible();
-    await expect(card).toContainText("Called");
+    await expect(cardForStatus("Called")).toContainText("Called");
     assert.equal((await request("/api/sessions", admin)).sessions.find(s => s.id === session.id).status, "called");
     await page.getByRole("button", { name: "Start Treatment", exact: true }).click();
-    await expect(card).toContainText("Running");
+    await expect(cardForStatus("Running")).toContainText("Running");
     assert.equal((await request("/api/sessions", admin)).sessions.find(s => s.id === session.id).status, "running");
     assert.deepEqual(errors, [], "linked scheduling and Called controls have no browser runtime errors");
   } finally { await browser.close(); }

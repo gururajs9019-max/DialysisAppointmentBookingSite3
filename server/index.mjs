@@ -180,7 +180,7 @@ function dateKey(value) {
 }
 function sessionDto(r) { return { ...r.data, id:r.id, patientId:r.patient_id, patientName:r.patient_data.name, uhid:r.uhid, machineId:r.machine_id, machine:r.machine_name, unitId:r.unit_id, unit:r.unit_name, date:dateKey(r.session_date), slot:r.slot, status:r.status, doctorId:r.doctor_id, prescriptionId:r.prescription_id, createdAt:r.created_at, updatedAt:r.updated_at }; }
 async function fetchMachineWithNextSession(client, machineId) {
-  return (await client.query(`
+  const machine = (await client.query(`
     SELECT m.*,
       next_session.patient_name AS next_patient,
       next_session.session_date AS next_patient_date,
@@ -198,6 +198,9 @@ async function fetchMachineWithNextSession(client, machineId) {
     ) next_session ON true
     WHERE m.id = $1
   `, [machineId])).rows[0] ?? null;
+  return machine && machine.next_patient_date
+    ? { ...machine, next_patient_date: dateKey(machine.next_patient_date) }
+    : machine;
 }
 async function recalculateMachineAvailability(client, machineId) {
   const machine = (await client.query("SELECT id,status FROM dialysis_machines WHERE id=$1 FOR UPDATE", [machineId])).rows[0];
@@ -356,7 +359,7 @@ export async function api(req, res, url) {
         if (rescheduleFields.some(key => !(key in x))) throw httpError(400, "A reschedule must include its unit, machine, date, and slot.");
         x.machineId = text(x.machineId, "machineId", { required: true, max: 100 });
         x.unitId = text(x.unitId, "unitId", { required: true, max: 100 });
-        x.date = dateOnly(x.date, "date");
+        x.date = dateOnly(text(x.date, "date", { required: true, max: 10 }), "date");
         x.slot = text(x.slot, "slot", { required: true, max: 80 });
         for (const key of ["startTime","endTime","duration","emergencyTime"]) {
           if (key in x) x[key] = text(x[key], key, { max: 100 });

@@ -119,7 +119,7 @@ const asMachine = (m: Record<string, unknown>): Machine => ({
   currentPatient: typeof m.current_patient === "string" ? m.current_patient : null,
   nextPatient: typeof m.next_patient === "string" ? m.next_patient : null,
   nextAvailableTime: typeof m.next_patient_date === "string" && typeof m.next_patient_slot === "string"
-    ? `${m.next_patient_date} · ${m.next_patient_slot}` : null,
+    ? `${m.next_patient_date.slice(0, 10)} · ${m.next_patient_slot}` : null,
   lastMaintenance: "", notes: String(m.notes || ""),
 });
 
@@ -395,6 +395,15 @@ export type SessionUpdatePayload = {
   status: "scheduled" | "waiting" | "called" | "running" | "completed" | "missed" | "cancelled";
   missedReason?: string;
   missedReasonOther?: string;
+  machineId?: string;
+  unitId?: string;
+  date?: string;
+  slot?: string;
+  slotType?: "normal" | "emergency";
+  emergencyTime?: string;
+  startTime?: string;
+  endTime?: string;
+  duration?: string;
   [key: string]: unknown;
 };
 export type SchedulingOptions = {
@@ -404,7 +413,7 @@ export type SchedulingOptions = {
 export const fetchSchedulingOptions = (patientId?: string) =>
   request<SchedulingOptions>(`/api/scheduling-options?patientId=${encodeURIComponent(patientId || "")}`);
 export const updateSession = async (id: string, payload: SessionUpdatePayload) => {
-  const result = await request<{ session: Record<string, unknown>; machine?: Record<string, unknown> }>(
+  const result = await request<{ session: Record<string, unknown>; machine?: Record<string, unknown>; machines?: Record<string, unknown>[] }>(
     `/api/sessions/${encodeURIComponent(id)}`,
     { method: "PATCH", body: JSON.stringify(payload) },
     "save",
@@ -412,6 +421,7 @@ export const updateSession = async (id: string, payload: SessionUpdatePayload) =
   return {
     session: asSession(result.session),
     machine: result.machine ? asMachine(result.machine) : undefined,
+    machines: result.machines?.map(asMachine),
   };
 };
 export const createSession = async (session: { patientId: string; machineId: string; unitId: string; date: string; slot: string; status?: string; [key: string]: unknown }) => {

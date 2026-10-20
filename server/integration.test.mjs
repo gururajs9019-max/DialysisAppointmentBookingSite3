@@ -105,10 +105,11 @@ async function runBrowserPrescriptionCacheTest(prescriptionId, adminCookie, doct
   }
 }
 
-async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate) {
+async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, conflictPatientId, assignmentDate) {
   const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage();
+    const context = await browser.newContext({ timezoneId: "Asia/Kolkata" });
+    const page = await context.newPage();
     await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Administrator Portal" }).click();
     await page.getByLabel("Username").fill("admin1");
@@ -116,39 +117,38 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
     await page.getByRole("button", { name: "Sign In" }).click();
 
     await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    const dashboardPatientRow = () => page.locator("div.divide-y.divide-slate-50 > div.px-6.py-4")
+      .filter({ hasText: patient.uhid });
     await page.getByRole("button", { name: patient.name, exact: true }).click();
+    const patientDetails = page.getByRole("dialog");
+    await patientDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
+    assert.equal(await patientDetails.getByText(patient.uhid, { exact: true }).isVisible(), true, "patient UHID must appear in appointment details");
+    assert.equal(await patientDetails.getByText("Unassigned", { exact: true }).isVisible(), true, "an unassigned patient must be identified clearly");
+    await patientDetails.getByRole("button", { name: "Assign Today", exact: true }).click();
     await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
     assert.equal(await page.getByText(patient.name, { exact: true }).isVisible(), true, "selected patient name must be shown at unit selection");
-    assert.equal(await page.getByText(`(${patient.uhid})`, { exact: true }).isVisible(), true, "selected patient UHID must be shown at unit selection");
-
-    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-    await page.getByRole("button", { name: "Machines", exact: true }).click();
-    await page.getByRole("heading", { name: "Machine Management" }).waitFor();
-    const machineHeading = page.getByRole("heading", { name: machineCode, exact: true });
-    const machineCard = machineHeading.locator("xpath=../../..");
-    await machineCard.getByRole("button", { name: "Assign Patient", exact: true }).click();
-    await page.getByRole("heading", { name: "Select Patient" }).waitFor();
-    await page.getByRole("button").filter({ hasText: patient.name }).click();
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
+    const unitOne = page.getByRole("button").filter({ hasText: "Unit 1" }).last();
+    await unitOne.click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("heading", { name: /Select Machine —/ }).waitFor();
-    const selectedMachine = page.getByRole("button").filter({ hasText: machineCode });
-    assert.equal(await selectedMachine.count(), 1, "machine action should preselect the chosen machine");
-    assert.match(await selectedMachine.getAttribute("class") || "", /border-violet-500/, "prefilled machine should remain selected after choosing a patient");
-
+    const initialMachine = page.getByRole("button").filter({ hasText: machine.code });
+    assert.equal(await initialMachine.count(), 1, "the schedule should display actual database machines");
+    await initialMachine.click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("heading", { name: "Schedule & Confirm" }).waitFor();
     await page.getByRole("button", { name: /Normal Slot/ }).click();
     await page.getByRole("button", { name: /^Slot 1/ }).click();
-    await page.locator('input[type="date"]').fill(assignmentDate);
+    const appointmentDateField = page.getByLabel("Appointment date");
+    assert.equal(await appointmentDateField.inputValue(), assignmentDate, "Today assignment must default to the browser's local date");
+    assert.equal(await appointmentDateField.getAttribute("readonly"), "", "Today assignment date must be read-only");
+    assert.equal(await page.getByLabel("Treating Doctor").count(), 0, "Today assignment must not require or display a treating doctor selector");
     const unitsRefreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/units");
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await unitsRefreshed;
     await page.waitForLoadState("networkidle");
     assert.equal(await page.getByRole("heading", { name: "Schedule & Confirm" }).isVisible(),true,
       "a background staff refresh must not restart an in-progress assignment");
-    assert.equal(await page.locator('input[type="date"]').inputValue(),assignmentDate,
+    assert.equal(await appointmentDateField.inputValue(),assignmentDate,
       "the assignment date survives background refresh");
     await page.getByRole("main").getByRole("button", { name: "Assign Patient", exact: true }).click();
     await page.getByRole("heading", { name: "Confirm Assignment" }).waitFor();
@@ -184,18 +184,36 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
     const savedAssignment = await assignmentResponse;
     const assignmentResult = await savedAssignment.json();
     assert.equal(savedAssignment.status(),201,assignmentResult.error || "browser assignment must save successfully");
+    const assignedSessionId = assignmentResult.session.id;
     await page.getByRole("heading", { name: "Assignment Confirmed" }).waitFor();
+
+    const conflictResponses = await page.evaluate(async ({ patientId, conflictPatientId, machineId, date }) => {
+      const payloads = [
+        { patientId, machineId, unitId: "U1", date, slot: "Slot 1" },
+        { patientId: conflictPatientId, machineId, unitId: "U1", date, slot: "Slot 1" },
+      ];
+      const results = await Promise.all(payloads.map(async payload => {
+        const response = await fetch("/api/sessions", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+        });
+        return response.status;
+      }));
+      return results;
+    }, { patientId: patient.id, conflictPatientId, machineId: machine.id, date: assignmentDate });
+    assert.deepEqual(conflictResponses, [409, 409], "patient and machine duplicate-slot conflicts must be rejected");
     await page.getByRole("button", { name: "Machines", exact: true }).click();
     await page.getByRole("heading", { name: "Machine Management" }).waitFor();
-    const assignedMachineCard = page.getByRole("heading", { name: machineCode, exact: true }).locator("xpath=../../..");
+    const assignedMachineCard = page.getByRole("heading", { name: machine.code, exact: true }).locator("xpath=../../..");
     assert.equal(await assignedMachineCard.getByText("Reserved", { exact: true }).isVisible(), true, "assigned machine should show scheduled status without a refresh");
     assert.equal(await assignedMachineCard.getByText(patient.name, { exact: true }).isVisible(), true, "assigned machine should show its next patient without a refresh");
     assert.equal(await assignedMachineCard.getByRole("button", { name: "Assign Patient", exact: true }).count(), 0, "scheduled machine must not be offered as available");
 
     await page.getByRole("button", { name: "Dashboard", exact: true }).click();
     await page.locator('input[type="date"]').fill(assignmentDate);
-    const dailyPatientRow = page.getByText(patient.uhid, { exact: true }).locator("xpath=../../../..");
+    const dailyPatientRow = dashboardPatientRow();
     await dailyPatientRow.getByText("Waiting", { exact: true }).waitFor();
+    await dailyPatientRow.getByText("Assigned", { exact: true }).waitFor();
+    await dailyPatientRow.getByText(machine.name, { exact: true }).waitFor();
     assert.equal(await dailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
       "the daily patient list must reflect the saved YYYY-MM-DD session and hide Assign");
 
@@ -206,18 +224,107 @@ async function runBrowserPatientHandoffTest(patient, machineCode, assignmentDate
     await page.getByRole("button", { name: "Sign In" }).click();
     await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
     await page.locator('input[type="date"]').fill(assignmentDate);
-    const refreshedDailyPatientRow = page.getByText(patient.uhid, { exact: true }).locator("xpath=../../../..");
+    const refreshedDailyPatientRow = dashboardPatientRow();
     await refreshedDailyPatientRow.getByText("Waiting", { exact: true }).waitFor();
+    await refreshedDailyPatientRow.getByText("Assigned", { exact: true }).waitFor();
     assert.equal(await refreshedDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
       "the assignment remains visible and cannot be assigned again after a full page reload");
 
-    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("button", { name: patient.name, exact: true }).click();
+    const assignedDetails = page.getByRole("dialog");
+    await assignedDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
+    await assignedDetails.getByText(machine.name, { exact: true }).waitFor();
+    await assignedDetails.getByRole("button", { name: "Reschedule Appointment", exact: true }).click();
+    await page.getByRole("heading", { name: "Reschedule Appointment" }).waitFor();
+    await page.getByLabel("Reschedule unit").selectOption({ label: "Unit 2" });
+    await page.getByLabel("Reschedule machine").selectOption({ label: `${alternateMachine.code} · Negative` });
+    await page.getByLabel("Reschedule time slot").selectOption("Slot 2");
+    let failFirstReschedule = true;
+    await page.route(`**/api/sessions/${assignedSessionId}`, async route => {
+      if (route.request().method() === "PATCH" && failFirstReschedule) {
+        failFirstReschedule = false;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Synthetic appointment conflict. Try another slot." }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    const failedRescheduleResponsePromise = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `/api/sessions/${assignedSessionId}` && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "Save Reschedule", exact: true }).click();
+    const failedRescheduleResponse = await failedRescheduleResponsePromise;
+    assert.equal(failedRescheduleResponse.status(), 409, "reschedule slot conflicts must be surfaced without discarding the draft");
+    await page.getByRole("alert").getByText(/Synthetic appointment conflict/).waitFor();
+    assert.equal(await page.getByRole("heading", { name: "Reschedule Appointment" }).isVisible(), true,
+      "a failed reschedule must leave the editing form open");
+    assert.equal(await page.getByLabel("Reschedule machine").inputValue(), alternateMachine.id,
+      "a failed reschedule must preserve the selected machine");
+    assert.equal(await page.getByLabel("Reschedule time slot").inputValue(), "Slot 2",
+      "a failed reschedule must preserve the selected slot");
+    assert.equal(await page.getByRole("button", { name: "Save Reschedule", exact: true }).isEnabled(), true,
+      "the administrator can retry after a reschedule conflict");
+    const rescheduleResponsePromise = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `/api/sessions/${assignedSessionId}` && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "Save Reschedule", exact: true }).click();
+    const rescheduleResponse = await rescheduleResponsePromise;
+    const rescheduleResult = await rescheduleResponse.json();
+    assert.equal(rescheduleResponse.status(), 200, rescheduleResult.error || "dashboard rescheduling must save successfully");
+    assert.equal(rescheduleResult.session.id, assignedSessionId, "rescheduling must update the original session row");
+    assert.equal(rescheduleResult.session.machineId, alternateMachine.id, "rescheduled session must use the chosen machine");
+    assert.equal(rescheduleResult.session.date, assignmentDate, "rescheduled appointment date must remain the local calendar date");
+    assert.equal(rescheduleResult.session.slot, "Slot 2", "rescheduled appointment must use the chosen time slot");
+    await page.unroute(`**/api/sessions/${assignedSessionId}`);
+    await assignedDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
+    await assignedDetails.getByText(alternateMachine.name, { exact: true }).waitFor();
+    await assignedDetails.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    await page.locator('input[type="date"]').fill(assignmentDate);
+    const persistedRescheduleRow = dashboardPatientRow();
+    await persistedRescheduleRow.getByText(alternateMachine.name, { exact: true }).waitFor();
+    await persistedRescheduleRow.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
+
+    await page.getByRole("button", { name: patient.name, exact: true }).click();
+    const cancelDetails = page.getByRole("dialog");
+    await cancelDetails.getByRole("button", { name: "Cancel Appointment", exact: true }).click();
+    await page.getByRole("heading", { name: "Cancel Appointment" }).waitFor();
+    const cancellationResponsePromise = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `/api/sessions/${assignedSessionId}` && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "Confirm Cancellation", exact: true }).click();
+    const cancellationResponse = await cancellationResponsePromise;
+    const cancellationResult = await cancellationResponse.json();
+    assert.equal(cancellationResponse.status(), 200, cancellationResult.error || "dashboard cancellation must save successfully");
+    assert.equal(cancellationResult.session.id, assignedSessionId, "cancellation must retain the appointment record");
+    assert.equal(cancellationResult.session.status, "cancelled", "cancellation must be persisted");
+    const cancelledDailyPatientRow = dashboardPatientRow();
+    await cancelledDailyPatientRow.getByText("Unassigned", { exact: true }).waitFor();
+    assert.equal(await cancelledDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).isVisible(), true,
+      "cancelling an appointment must immediately release the patient for a new assignment");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    const persistedCancellationRow = dashboardPatientRow();
+    await persistedCancellationRow.getByText("Unassigned", { exact: true }).waitFor();
+
     await page.route(`${baseUrl}/api/patients/${encodeURIComponent(patient.id)}`, route => route.fulfill({
       status: 404,
       contentType: "application/json",
       body: JSON.stringify({ error: "Patient was not found." }),
     }));
     await page.getByRole("button", { name: patient.name, exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Assign Today", exact: true }).click();
     await page.getByText(/Patient was not found\./).waitFor();
     assert.equal(await page.getByRole("heading", { name: "Select Patient" }).isVisible(), true, "missing patient must return to visible patient selection");
     assert.equal(await page.getByText(/Search for a patient below to choose one manually\./).isVisible(), true, "missing patient must show recovery guidance");
@@ -240,7 +347,7 @@ async function runBrowserSessionOutcomeTest(patientName, machineCode, machineNam
 
     await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
     await page.getByRole("heading", { name: "Live Dialysis Schedule" }).waitFor();
-    const sessionCard = page.getByRole("button").filter({ hasText: patientName });
+    const sessionCard = page.getByRole("button").filter({ hasText: patientName }).filter({ hasText: machineName });
     await sessionCard.waitFor();
     await sessionCard.click();
     await page.locator("#missed-session-reason").fill(reason);
@@ -315,16 +422,17 @@ try {
   await expectStatus(request("/api/patients"), 401, "unauthenticated patient read must be denied");
   const admin = await login("admin", process.env.STAFF_ADMIN_PASSWORD);
   const doctor = await login("doctor", process.env.STAFF_DOCTOR_PASSWORD);
-  const today = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date());
-  const browserAssignmentDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-  const browserAssignmentDay = new Intl.DateTimeFormat("en-US", { weekday: "long" })
-    .format(new Date(`${browserAssignmentDate}T12:00:00`));
+  const localDateParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date()).reduce((parts, part) => ({ ...parts, [part.type]: part.value }), {});
+  const browserAssignmentDate = `${localDateParts.year}-${localDateParts.month}-${localDateParts.day}`;
+  const today = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", weekday: "long" }).format(new Date());
 
   const primary = await expectStatus(request("/api/patients", {
     method: "POST", cookie: admin,
     body: {
       uhid: `${run}-NEG`, name: `${run} Negative Patient`, viralStatus: { hepatitisB: "Negative", hepatitisC: "Negative", hiv: "Negative" },
-       dialysisDays: [today, browserAssignmentDay], dialysisDaysPerWeek: 2,
+       dialysisDays: [today], dialysisDaysPerWeek: 1,
       medicalInfo: { dialysisAccess: "AV Fistula", opdIpd: "OPD" },
       investigations: { cbc: { hemoglobin: "10.4 g/dL" }, serumFerritin: "280 ng/mL" },
     },
@@ -361,21 +469,23 @@ try {
   const negativeMachine = await createMachine("NEG-1", "Negative");
   const secondNegativeMachine = await createMachine("NEG-2", "Negative");
   const hcvMachine = await createMachine("HCV", "HCV");
-  await runBrowserPatientHandoffTest(primary.patient, negativeMachine.code, browserAssignmentDate);
+  const rescheduleMachine = await expectStatus(request("/api/machines", {
+    method: "POST", cookie: admin,
+    body: { unitId: "U2", code: `${run}-RESCHEDULE`, name: `${run} Reschedule`, category: "Negative" },
+  }), 201, "admin should create a second-unit reschedule machine");
+  ids.machines.push(rescheduleMachine.machine.id);
+  await runBrowserPatientHandoffTest(primary.patient, negativeMachine, rescheduleMachine.machine, second.patient.id, browserAssignmentDate);
   const browserSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-created sessions should be readable");
   const browserSession = browserSessions.sessions.find(item =>
-    item.patientId === primary.patient.id && item.machineId === negativeMachine.id && item.date === browserAssignmentDate && item.slot === "Slot 1"
+    item.patientId === primary.patient.id && item.machineId === rescheduleMachine.machine.id &&
+    item.date === browserAssignmentDate && item.slot === "Slot 2"
   );
   assert.ok(browserSession, "browser assignment must persist a session");
+  assert.equal(browserSession.status, "cancelled", "the browser cancellation must retain the session row");
   ids.sessions.push(browserSession.id);
-  await expectStatus(request("/api/sessions", {
-    method: "POST", cookie: admin,
-    body: { patientId: primary.patient.id, machineId: negativeMachine.id, unitId: "U1", date: browserAssignmentDate, slot: "Slot 1" },
-  }), 409, "the same patient and slot cannot be assigned twice");
-  await expectStatus(request("/api/sessions", {
-    method: "POST", cookie: admin,
-    body: { patientId: second.patient.id, machineId: negativeMachine.id, unitId: "U1", date: browserAssignmentDate, slot: "Slot 1" },
-  }), 409, "a machine cannot be double-booked for the same date and slot");
+  const machinesAfterDashboardCancellation = await expectStatus(request("/api/machines", { cookie: admin }), 200, "dashboard cancellation should release its destination machine");
+  assert.equal(machinesAfterDashboardCancellation.machines.find(item => item.id === rescheduleMachine.machine.id)?.status,
+    "available", "cancelling a rescheduled appointment should release the destination machine");
   const outcomeMachine = await createMachine("OUTCOME", "Negative");
   const todayDate = new Date().toISOString().slice(0, 10);
   const outcomeSession = await expectStatus(request("/api/sessions", {
@@ -421,6 +531,11 @@ try {
     body: { patientId: primary.patient.id, machineId: negativeMachine.id, unitId: "U1", date, slot: "Slot 1" },
   }), 201, "doctor should schedule a compatible session");
   ids.sessions.push(session.session.id);
+  const remainingMachineSession = await expectStatus(request("/api/sessions", {
+    method: "POST", cookie: doctor,
+    body: { patientId: second.patient.id, machineId: negativeMachine.id, unitId: "U1", date, slot: "Slot 2" },
+  }), 201, "machine should support a second non-conflicting scheduled appointment");
+  ids.sessions.push(remainingMachineSession.session.id);
   assert.equal(session.session.status, "scheduled", "new session POST DTO must retain scheduled status");
   const machinesAfterAssignment = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machines should be readable after an assignment");
   const scheduledMachine = machinesAfterAssignment.machines.find(item => item.id === negativeMachine.id);
@@ -455,10 +570,10 @@ try {
   const machineAfterMissed = await expectStatus(request("/api/machines", { cookie: doctor }), 200, "machine availability should refresh after a missed session");
   const stillScheduledMachine = machineAfterMissed.machines.find(item => item.id === negativeMachine.id);
   assert.equal(stillScheduledMachine?.status, "scheduled", "machine should remain scheduled while another active session remains");
-  assert.equal(stillScheduledMachine?.next_patient, primary.patient.name, "machine should expose the next remaining active patient");
-  const cancelledUpdate = await expectStatus(request(`/api/sessions/${browserSession.id}`, {
+  assert.equal(stillScheduledMachine?.next_patient, second.patient.name, "machine should expose the next remaining active patient");
+  const cancelledUpdate = await expectStatus(request(`/api/sessions/${remainingMachineSession.session.id}`, {
     method: "PATCH", cookie: doctor, body: { status: "cancelled" },
-  }), 200, "staff should be able to cancel a scheduled session");
+  }), 200, "staff should be able to cancel a remaining scheduled session");
   assert.equal(cancelledUpdate.session.status, "cancelled", "cancellation response should immediately include the cancelled session status");
   assert.equal(cancelledUpdate.machine.id, negativeMachine.id, "cancellation response should include the affected machine");
   assert.equal(cancelledUpdate.machine.status, "available", "cancellation response should show the released machine");

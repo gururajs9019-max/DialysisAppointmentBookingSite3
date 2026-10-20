@@ -41,6 +41,12 @@ try {
     unitId: unit.id, code: run, name: run, category: "Negative", status: "available",
   }, 201)).machine;
   ids.machines.push(machine.id);
+  const secondUnit = (await req("/api/units", admin, "POST", { name: `${run} second unit` }, 201)).unit;
+  ids.units.push(secondUnit.id);
+  const secondMachine = (await req("/api/machines", admin, "POST", {
+    unitId: secondUnit.id, code: `${run}-second`, name: `${run} second machine`, category: "Negative",
+  }, 201)).machine;
+  ids.machines.push(secondMachine.id);
   const patientInput = { name: `${run} patient`, uhid: run, treatmentStatus: "Active" };
   const patient = (await req("/api/patients", admin, "POST", patientInput, 201)).patient;
   ids.patients.push(patient.id);
@@ -96,6 +102,53 @@ try {
   assert.equal((await req(`/api/sessions/${session.id}`, doctorCookie, "PATCH", { status: "called", vitals: { bp: "120/80" } })).session.vitals.bp, "120/80");
   const listed = (await req("/api/machines", admin)).machines.find(m => m.id === machine.id);
   assert.equal(listed.next_patient_date.slice(0,10), date, "Called sessions remain in the machine schedule");
+
+  const move = {
+    status: "called", machineId: secondMachine.id, unitId: secondUnit.id, date,
+    slot: "Slot 3", slotType: "normal", startTime: "4:00 PM", endTime: "8:00 PM", duration: "4 hours",
+  };
+  await req(`/api/sessions/${session.id}`, doctorCookie, "PATCH", move, 403);
+  await req(`/api/sessions/${session.id}`, admin, "PATCH", { ...move, machineId: machine.id }, 400);
+  await req(`/api/sessions/${session.id}`, admin, "PATCH", { status: "called", machineId: secondMachine.id }, 400);
+  const collision = (await req("/api/sessions", admin, "POST", {
+    patientId: other.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 3",
+  }, 201)).session;
+  ids.sessions.push(collision.id);
+  await req(`/api/sessions/${session.id}`, admin, "PATCH", move, 409);
+  const unchanged = (await req("/api/sessions", admin)).sessions.find(item => item.id === session.id);
+  assert.equal(unchanged.machineId, machine.id, "a slot conflict must leave the original appointment unchanged");
+  assert.equal(unchanged.slot, "Slot 1");
+  await req(`/api/sessions/${collision.id}`, admin, "PATCH", { status: "cancelled" });
+
+  const moved = (await req(`/api/sessions/${session.id}`, admin, "PATCH", move)).session;
+  assert.equal(moved.id, session.id, "rescheduling must retain the original session ID");
+  assert.equal(moved.machineId, secondMachine.id);
+  assert.equal(moved.unit, secondUnit.name);
+  assert.equal(moved.date, date);
+  assert.equal(moved.slot, "Slot 3");
+  const moveAudit = await db.query(
+    "SELECT metadata FROM audit_logs WHERE action='session.reschedule' AND entity_id=$1 ORDER BY created_at DESC LIMIT 1",
+    [session.id],
+  );
+  assert.equal(moveAudit.rowCount, 1, "rescheduling must be audited");
+  assert.equal(moveAudit.rows[0].metadata.before.machineId, machine.id);
+  assert.equal(moveAudit.rows[0].metadata.after.machineId, secondMachine.id);
+  const machinesAfterMove = (await req(`/api/machines`, admin)).machines;
+  assert.equal(machinesAfterMove.find(item => item.id === machine.id)?.status, "available", "moving an appointment must release its old machine");
+  assert.equal(machinesAfterMove.find(item => item.id === secondMachine.id)?.status, "scheduled", "the destination machine must be reserved");
+
+  const oldSlotReused = (await req("/api/sessions", admin, "POST", {
+    patientId: other.id, unitId: unit.id, machineId: machine.id, date, slot: "Slot 1",
+  }, 201)).session;
+  ids.sessions.push(oldSlotReused.id);
+  const cancelled = (await req(`/api/sessions/${session.id}`, admin, "PATCH", { status: "cancelled" })).session;
+  assert.equal(cancelled.id, session.id, "cancellation must retain the appointment row");
+  assert.equal(cancelled.status, "cancelled");
+  const targetSlotReused = (await req("/api/sessions", admin, "POST", {
+    patientId: other.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 3",
+  }, 201)).session;
+  ids.sessions.push(targetSlotReused.id);
+
   await req(`/api/patients/${patient.id}`, admin, "PATCH", { treatmentStatus: "Temporarily inactive" });
   assert.equal((await req("/api/sessions", doctorCookie)).sessions.find(s => s.id === session.id).status, "cancelled");
   await req(`/api/patients/${patient.id}`, admin, "PATCH", { treatmentStatus: "Active" });

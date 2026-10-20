@@ -910,11 +910,12 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect }: {
 
 // ─── Step 4: Schedule ─────────────────────────────────────────────────────────
 
-function Step4Schedule({ draft, onChange, validation, units }: {
+function Step4Schedule({ draft, onChange, validation, units, todayOnly = false }: {
   draft: AssignmentDraft;
   onChange: (key: keyof AssignmentDraft, value: string) => void;
   validation: ValidationResult;
   units: DialysisUnit[];
+  todayOnly?: boolean;
 }) {
   const inputCls = "w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white";
   const labelCls = "block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5";
@@ -1051,11 +1052,13 @@ function Step4Schedule({ draft, onChange, validation, units }: {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Date *</label>
-          <input type="date" className={inputCls} value={draft.date}
-            onChange={e => onChange("date", e.target.value)}
-            min={new Date().toISOString().split("T")[0]} />
+          {todayOnly
+            ? <input type="text" aria-label="Appointment date" className={inputCls} value={draft.date} readOnly />
+            : <input type="date" aria-label="Appointment date" className={inputCls} value={draft.date}
+                onChange={e => onChange("date", e.target.value)}
+                min={localDateKey(new Date())} />}
         </div>
-        <ScheduleClinicalLinks key={draft.patient?.id} patientId={draft.patient?.id} value={draft}
+        <ScheduleClinicalLinks key={draft.patient?.id} patientId={draft.patient?.id} value={draft} hideTreatingDoctor={todayOnly}
           onChange={links => { for (const key of ["doctor", "doctorId", "prescriptionId"] as const) onChange(key, links[key]); }} />
       </div>
 
@@ -1085,10 +1088,11 @@ function Step4Schedule({ draft, onChange, validation, units }: {
 
 // ─── Confirmation Dialog ──────────────────────────────────────────────────────
 
-function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitting, submissionError }: {
+function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitting, submissionError, todayOnly }: {
   draft: AssignmentDraft; validation: ValidationResult;
   onConfirm: () => void; onCancel: () => void;
   isSubmitting: boolean; submissionError: string | null;
+  todayOnly: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1108,7 +1112,7 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitti
               : [{ label: "Dialysis Slot", value: draft.slot ? `${draft.slot} · ${draft.startTime} – ${draft.endTime}` : "—" }]
             ),
             { label: "Date",      value: draft.date || "—" },
-            { label: "Doctor",    value: draft.doctor || "Not assigned" },
+            ...(!todayOnly ? [{ label: "Doctor", value: draft.doctor || "Not assigned" }] : []),
           ].map(item => (
             <div key={item.label} className="flex justify-between text-sm">
               <span className="text-slate-500 font-medium w-24 shrink-0">{item.label}</span>
@@ -1147,13 +1151,16 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitti
 
 // ─── Assign Patient Section (4-step wizard) ───────────────────────────────────
 
-function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine, prefillPatientId }: {
+function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine, prefillPatientId, todayOnly = false, prefillDate }: {
   patients: Patient[]; machines: Machine[]; units: DialysisUnit[];
   sessions: DialysisSession[];
   onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
   prefillMachine?: Machine | null;
   prefillPatientId?: string | null;
+  todayOnly?: boolean;
+  prefillDate?: string | null;
 }) {
+  const assignedDate = todayOnly ? localDateKey(new Date()) : prefillDate ?? "";
   const prefillUnit = prefillMachine
     ? units.find(u => u.id === prefillMachine.unit) ?? null
     : null;
@@ -1164,7 +1171,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
   const submissionInFlight = useRef(false);
   const [draft, setDraft] = useState<AssignmentDraft>({
     patient: null, unit: prefillUnit, machine: prefillMachine ?? null,
-    slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: "",
+    slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: assignedDate,
     slotType: "", emergencyTime: "",
   });
   const [showConfirm, setShowConfirm] = useState(false);
@@ -1183,12 +1190,12 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     let cancelled = false;
     setPrefillLoading(true);
     setPrefillError(null);
-    setDraft(d => ({ ...d, patient: null, unit: null, machine: prefillMachine ?? null }));
+    setDraft(d => ({ ...d, patient: null, unit: null, machine: prefillMachine ?? null, date: assignedDate }));
     setStep(1);
     fetchPatientById(prefillPatientId)
       .then(patient => {
         if (cancelled) return;
-        setDraft(d => ({ ...d, patient, unit: prefillUnit, machine: prefillMachine ?? null }));
+        setDraft(d => ({ ...d, patient, unit: prefillUnit, machine: prefillMachine ?? null, date: assignedDate }));
         setStep(prefillMachine ? 3 : 2);
       })
       .catch(error => {
@@ -1199,7 +1206,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       .finally(() => { if (!cancelled) setPrefillLoading(false); });
     return () => { cancelled = true; };
   // Refreshes replace directory objects, not the user's navigation intent.
-  }, [prefillPatientId, prefillMachine?.id, prefillUnit?.id]);
+  }, [prefillPatientId, prefillMachine?.id, prefillUnit?.id, assignedDate]);
 
   const setField = (key: keyof AssignmentDraft, value: string) =>
     setDraft(d => ({ ...d, [key]: value }));
@@ -1267,7 +1274,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
           <p>✓ Dashboard reflects new assignment</p>
         </div>
         <button onClick={() => {
-          setDraft({ patient: null, unit: null, machine: null, slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: "", slotType: "", emergencyTime: "" });
+          setDraft({ patient: null, unit: null, machine: null, slot: "", startTime: "", endTime: "", duration: "4 hours", doctor: "", notes: "", date: assignedDate, slotType: "", emergencyTime: "" });
           setStep(1);
         }} className="px-6 py-2.5 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors font-semibold">
           New Assignment
@@ -1362,7 +1369,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">4</span>
               Schedule & Confirm
             </h3>
-            <Step4Schedule draft={draft} onChange={setField} validation={validation} units={units} />
+            <Step4Schedule draft={draft} onChange={setField} validation={validation} units={units} todayOnly={todayOnly} />
           </>
         )}
       </div>
@@ -1396,7 +1403,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
       {showConfirm && (
         <ConfirmationDialog draft={draft} validation={validation}
           onConfirm={handleConfirm} onCancel={() => { if (!isSubmitting) setShowConfirm(false); }}
-          isSubmitting={isSubmitting} submissionError={submissionError} />
+          isSubmitting={isSubmitting} submissionError={submissionError} todayOnly={todayOnly} />
       )}
     </div>
   );
@@ -1954,13 +1961,255 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
 
 const WEEK_DAYS_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
+function DashboardPatientDetailsDialog({ patient, session, units, machines, sessions, selectedDate, todayDate, onAssign, onUpdate, onClose }: {
+  patient: Patient;
+  session?: DialysisSession;
+  units: DialysisUnit[];
+  machines: Machine[];
+  sessions: DialysisSession[];
+  selectedDate: string;
+  todayDate: string;
+  onAssign: (todayOnly: boolean) => void;
+  onUpdate: (id: string, payload: SessionUpdatePayload) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"details" | "reschedule" | "cancel">("details");
+  const [unitId, setUnitId] = useState(session?.unit ?? "");
+  const [machineId, setMachineId] = useState(session?.machineId ?? "");
+  const [slot, setSlot] = useState(SLOTS.some(item => item.label === session?.slot) ? session!.slot : SLOTS[0].label);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const assigned = Boolean(session);
+  const canManageAppointment = Boolean(session && session.date === todayDate &&
+    ["Scheduled","Waiting","Called"].includes(session.status));
+  const statusMap: Record<SessionStatus, SessionUpdatePayload["status"]> = {
+    Scheduled: "scheduled", Waiting: "waiting", Called: "called", Running: "running",
+    Completed: "completed", Missed: "missed", Cancelled: "cancelled",
+  };
+  const selectedSlot = SLOTS.find(item => item.label === slot);
+  const eligibleMachines = useMemo(() => machines.filter(machine =>
+    machine.unit === unitId &&
+    ["available","scheduled","in-use"].includes(machine.status) &&
+    isMachineCompatible(patient, machine) &&
+    !sessions.some(existing =>
+      existing.id !== session?.id &&
+      existing.machineId === machine.id &&
+      existing.date === todayDate &&
+      existing.slot === slot &&
+      !["Cancelled","Missed"].includes(existing.status)
+    )
+  ), [machines, unitId, patient, sessions, session?.id, todayDate, slot]);
+  const patientConflict = sessions.some(existing =>
+    existing.id !== session?.id &&
+    existing.patientId === patient.id &&
+    existing.date === todayDate &&
+    existing.slot === slot &&
+    !["Cancelled","Missed"].includes(existing.status)
+  );
+  const selectedMachineAvailable = eligibleMachines.some(machine => machine.id === machineId);
+  const hasRescheduleChanges = Boolean(session && (
+    machineId !== session.machineId || unitId !== session.unit ||
+    slot !== session.slot || session.date !== todayDate
+  ));
+
+  const saveReschedule = async () => {
+    if (!session || !selectedSlot || !canManageAppointment || !selectedMachineAvailable || patientConflict || saving) return;
+    setSaving(true); setError(null);
+    try {
+      await onUpdate(session.id, {
+        status: statusMap[session.status],
+        machineId,
+        unitId,
+        date: todayDate,
+        slot,
+        slotType: "normal",
+        emergencyTime: "",
+        startTime: selectedSlot.startFmt,
+        endTime: selectedSlot.endFmt,
+        duration: "4 hours",
+      });
+      setMode("details");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The appointment could not be rescheduled. Please try again.");
+    } finally { setSaving(false); }
+  };
+
+  const cancelAppointment = async () => {
+    if (!session || !canManageAppointment || saving) return;
+    setSaving(true); setError(null);
+    try {
+      await onUpdate(session.id, { status: "cancelled" });
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The appointment could not be cancelled. Please try again.");
+    } finally { setSaving(false); }
+  };
+
+  const selectedUnitName = units.find(unit => unit.id === (session?.unit ?? ""))?.name ?? session?.unit ?? "—";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation">
+      <section role="dialog" aria-modal="true" aria-labelledby="dashboard-patient-dialog-title"
+        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 rounded-t-3xl bg-gradient-to-r from-violet-700 to-violet-900 px-6 py-5 text-white">
+          <div>
+            <h3 id="dashboard-patient-dialog-title" className="text-lg font-bold">
+              {mode === "reschedule" ? "Reschedule Appointment" : mode === "cancel" ? "Cancel Appointment" : "Patient Appointment Details"}
+            </h3>
+            <p className="mt-1 text-sm text-violet-100">{patient.name}</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} aria-label="Close patient details"
+            className="rounded-lg p-2 text-violet-100 hover:bg-white/10 disabled:opacity-50">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-5 p-6">
+          {mode === "details" && (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Patient ID</p>
+                  <p className="mt-1 break-all text-sm font-semibold text-slate-800">{patient.uhid}</p>
+                  <p className="mt-1 break-all text-[10px] text-slate-400">Record: {patient.id}</p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Appointment date</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{session?.date ?? selectedDate}</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border border-slate-100 p-3">
+                <span className="text-sm font-semibold text-slate-700">Assignment status</span>
+                <span className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                  assigned ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"
+                }`}>{assigned ? "Assigned" : "Unassigned"}</span>
+              </div>
+              {session && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {[
+                    ["Unit", selectedUnitName],
+                    ["Machine", session.machine],
+                    ["Time slot", session.slotType === "emergency"
+                      ? `Emergency · ${session.emergencyTime || session.startTime}`
+                      : `${session.slot} · ${session.startTime} – ${session.endTime}`],
+                    ["Session status", session.status],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-slate-100 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-800">{value || "—"}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={onClose}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Close</button>
+                {!assigned && patient.treatmentStatus === "Active" && (
+                  <button type="button" onClick={() => onAssign(selectedDate === todayDate)}
+                    className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
+                    {selectedDate === todayDate ? "Assign Today" : "Assign for Selected Date"}
+                  </button>
+                )}
+                {canManageAppointment && (
+                  <>
+                    <button type="button" onClick={() => { setError(null); setMode("cancel"); }}
+                      className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50">Cancel Appointment</button>
+                    <button type="button" onClick={() => {
+                      setUnitId(session?.unit ?? "");
+                      setMachineId(session?.machineId ?? "");
+                      setSlot(SLOTS.some(item => item.label === session?.slot) ? session!.slot : SLOTS[0].label);
+                      setError(null); setMode("reschedule");
+                    }} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
+                      Reschedule Appointment
+                    </button>
+                  </>
+                )}
+                {session && !canManageAppointment && (
+                  <p className="self-center text-xs text-slate-500">This session has started, ended, or is not scheduled for today.</p>
+                )}
+              </div>
+            </>
+          )}
+
+          {mode === "reschedule" && session && (
+            <>
+              <p className="text-sm text-slate-600">Change the unit, compatible machine, or time slot. The existing appointment record will be updated.</p>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Appointment date
+                <input aria-label="Reschedule date" type="text" value={todayDate} readOnly
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700" />
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Dialysis unit
+                <select aria-label="Reschedule unit" value={unitId} onChange={event => { setUnitId(event.target.value); setMachineId(""); }}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                  {units.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                </select>
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Dialysis machine
+                <select aria-label="Reschedule machine" value={machineId} onChange={event => setMachineId(event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                  <option value="">Select an available compatible machine</option>
+                  {eligibleMachines.map(machine => (
+                    <option key={machine.id} value={machine.id}>{machine.number} · {machine.category}</option>
+                  ))}
+                </select>
+                {eligibleMachines.length === 0 && <span className="mt-1 block text-xs text-red-700">No compatible machine is available for this slot in the selected unit.</span>}
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Time slot
+                <select aria-label="Reschedule time slot" value={slot} onChange={event => setSlot(event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                  {SLOTS.map(item => <option key={item.label} value={item.label}>{item.label} · {item.startFmt}–{item.endFmt}</option>)}
+                </select>
+              </label>
+              {patientConflict && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">This patient already has an appointment in that slot today.</p>}
+              {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" disabled={saving} onClick={() => { setError(null); setMode("details"); }}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Back</button>
+                <button type="button" disabled={saving || !selectedMachineAvailable || patientConflict || !hasRescheduleChanges}
+                  onClick={saveReschedule} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">
+                  {saving ? "Saving…" : "Save Reschedule"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === "cancel" && session && (
+            <>
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                Are you sure you want to cancel this dialysis appointment for {patient.name}? The appointment record will be retained for history.
+              </p>
+              {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" disabled={saving} onClick={() => { setError(null); setMode("details"); }}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Cancel</button>
+                <button type="button" disabled={saving} onClick={cancelAppointment}
+                  className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-wait disabled:opacity-60">
+                  {saving ? "Cancelling…" : "Confirm Cancellation"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DashboardSection({ patients, machines, sessions, units, onNavigate, onAssignToday, onUpdateSession }: {
   patients: Patient[]; machines: Machine[]; sessions: DialysisSession[];
   units: DialysisUnit[];
-  onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string }) => void;
+  onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string; todayOnly?: boolean; date?: string }) => void;
+  onAssignToday: (patientId: string) => void;
+  onUpdateSession: (id: string, payload: SessionUpdatePayload) => Promise<void>;
 }) {
   const todayDate = localDateKey(new Date());
   const [selectedDate, setSelectedDate] = useState(todayDate);
+  const [openedPatientId, setOpenedPatientId] = useState<string | null>(null);
+  const openedPatient = patients.find(patient => patient.id === openedPatientId) ?? null;
 
   const viewDay = WEEK_DAYS_FULL[new Date(selectedDate + "T12:00:00").getDay()];
   const isToday = selectedDate === todayDate;
@@ -1979,13 +2228,18 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
   const todaySessionMap = useMemo(() => {
     const map: Record<string, DialysisSession> = {};
     sessions
-      .filter(s => s.date === selectedDate || (isToday && s.date === "Today"))
+      .filter(s =>
+        (s.date === selectedDate || (isToday && s.date === "Today")) &&
+        !["Cancelled","Missed"].includes(s.status)
+      )
       .forEach(s => { map[s.patientId] = s; });
     return map;
   }, [sessions, selectedDate, isToday]);
 
   const activePatients  = patients.filter(p => p.treatmentStatus === "Active");
-  const todaySessions   = sessions.filter(s => s.date === todayDate || s.date === "Today");
+  const todaySessions   = sessions.filter(s =>
+    (s.date === todayDate || s.date === "Today") && !["Cancelled", "Missed"].includes(s.status)
+  );
   const runningNow      = sessions.filter(s => s.status === "Running");
   const availableMachines = machines.filter(m => m.status === "available");
   const maintenanceMachines = machines.filter(m => m.status === "maintenance" || m.status === "disabled");
@@ -2017,7 +2271,10 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {units.map(u => {
           const um = machines.filter(m => m.unit === u.id);
-          const us = sessions.filter(s => s.unit === u.id && (s.date === todayDate || s.date === "Today"));
+          const us = sessions.filter(s =>
+            s.unit === u.id && (s.date === todayDate || s.date === "Today") &&
+            !["Cancelled", "Missed"].includes(s.status)
+          );
           const uAvail  = um.filter(m => m.status === "available").length;
           const uInUse  = um.filter(m => m.status === "in-use").length;
           const uMaint  = um.filter(m => m.status === "maintenance").length;
@@ -2108,13 +2365,13 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
           <div className="divide-y divide-slate-50">
             {scheduledPatients.map(patient => {
               const session = todaySessionMap[patient.id];
-              const status: SessionStatus = session?.status ?? "Waiting";
+              const status: SessionStatus = session?.status ?? "Scheduled";
               const slotLabel = session ? (
                 session.slotType === "emergency"
                   ? `Emergency @ ${session.emergencyTime || session.startTime}`
                   : `${session.slot} · ${session.startTime} – ${session.endTime}`
-              ) : (patient.currentSchedule ?? "Not yet assigned");
-              const machineName = session?.machine ?? (patient.currentSchedule?.split(" · ")[1] ?? "—");
+              ) : "No appointment assigned";
+              const machineName = session?.machine ?? "—";
               const unitName = session ? (units.find(u => u.id === session.unit)?.name ?? session.unit) : "—";
 
               return (
@@ -2137,11 +2394,14 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <button
-                            onClick={() => onNavigate("assign-patient", "Assign Patient", { patientId: patient.id })}
+                            onClick={() => setOpenedPatientId(patient.id)}
                             className="font-bold text-slate-800 hover:text-violet-700 hover:underline text-left"
                           >
                             {patient.name}
                           </button>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                            session ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"
+                          }`}>{session ? "Assigned" : "Unassigned"}</span>
                           <span className="text-xs text-slate-400">{patient.uhid}</span>
                           {session?.slotType === "emergency" && (
                             <span className="px-1.5 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded-full text-[9px] font-bold">Emergency</span>
@@ -2155,14 +2415,14 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {session
-                        ? <SessionStatusPill status={status} />
-                        : <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500 border border-slate-200">Scheduled</span>}
+                      {session && <SessionStatusPill status={status} />}
                       {!session && patient.treatmentStatus === "Active" && (
                         <button
-                          onClick={() => onNavigate("assign-patient", "Assign Patient", { patientId: patient.id })}
+                          onClick={() => isToday
+                            ? onAssignToday(patient.id)
+                            : onNavigate("assign-patient", "Assign Patient", { patientId: patient.id, date: selectedDate })}
                           className="px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-bold hover:bg-violet-700">
-                          Assign
+                          {isToday ? "Assign" : "Assign for Date"}
                         </button>
                       )}
                     </div>
@@ -2173,6 +2433,24 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate }: {
           </div>
         )}
       </div>
+      {openedPatient && (
+        <DashboardPatientDetailsDialog
+          patient={openedPatient}
+          session={todaySessionMap[openedPatient.id]}
+          units={units}
+          machines={machines}
+          sessions={sessions}
+          selectedDate={selectedDate}
+          todayDate={todayDate}
+          onAssign={todayOnly => {
+            setOpenedPatientId(null);
+            if (todayOnly) onAssignToday(openedPatient.id);
+            else onNavigate("assign-patient", "Assign Patient", { patientId: openedPatient.id, date: selectedDate });
+          }}
+          onUpdate={onUpdateSession}
+          onClose={() => setOpenedPatientId(null)}
+        />
+      )}
 
       {/* Live schedule table */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -5384,6 +5662,8 @@ export default function AdminApp({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [prefillMachine, setPrefillMachine] = useState<Machine | null>(null);
   const [prefillPatientId, setPrefillPatientId] = useState<string | null>(null);
+  const [prefillTodayOnly, setPrefillTodayOnly] = useState(false);
+  const [prefillDate, setPrefillDate] = useState<string | null>(null);
   const [prescriptionTarget, setPrescriptionTarget] = useState<{ patientId: string; prescriptionId: string } | null>(null);
 
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -5426,7 +5706,10 @@ export default function AdminApp({
   const applySessionUpdate = async (id: string, payload: SessionUpdatePayload, updates: Partial<DialysisSession>) => {
     const result = await updateSession(id, payload);
     setSessions(prev => prev.map(s => s.id === id ? { ...s, ...result.session, ...updates } : s));
-    if (result.machine) {
+    if (result.machines) {
+      const updatedMachines = new Map(result.machines.map(machine => [machine.id, machine]));
+      setMachines(prev => prev.map(machine => updatedMachines.get(machine.id) ?? machine));
+    } else if (result.machine) {
       setMachines(prev => prev.map(machine => machine.id === result.machine!.id ? result.machine! : machine));
     }
   };
@@ -5464,15 +5747,31 @@ export default function AdminApp({
     patientId?: string;
     prescriptionId?: string;
     skipGuard?: boolean;
+    todayOnly?: boolean;
+    date?: string;
   }) => {
     if (section !== activeSection && !opts?.skipGuard && !confirmLeave()) return;
     setActiveSection(section);
     setActiveSectionLabel(label);
     setPrefillMachine(opts?.machine ?? null);
     setPrefillPatientId(opts?.patientId ?? null);
+    setPrefillTodayOnly(Boolean(opts?.todayOnly));
+    setPrefillDate(opts?.date ?? null);
     setPrescriptionTarget(section === "treatment-status" && opts?.prescriptionId
       ? { patientId: opts.patientId ?? "", prescriptionId: opts.prescriptionId }
       : null);
+    setSidebarOpen(false);
+  };
+  const assignPatientToday = (patientId: string) => {
+    if (!confirmLeave()) return;
+    const date = localDateKey(new Date());
+    setActiveSection("assign-patient");
+    setActiveSectionLabel("Assign Patient");
+    setPrefillMachine(null);
+    setPrefillPatientId(patientId);
+    setPrefillTodayOnly(true);
+    setPrefillDate(date);
+    setPrescriptionTarget(null);
     setSidebarOpen(false);
   };
 
@@ -5526,9 +5825,13 @@ export default function AdminApp({
   const renderContent = () => {
     switch (activeSection) {
       case "dashboard":
-        return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate} />;
+        return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate}
+          onAssignToday={assignPatientToday}
+          onUpdateSession={(id, payload) => applySessionUpdate(id, payload, {})} />;
       case "assign-patient":
-        return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions} onAssigned={handleAssigned} prefillMachine={prefillMachine} prefillPatientId={prefillPatientId} />;
+        return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions}
+          onAssigned={handleAssigned} prefillMachine={prefillMachine} prefillPatientId={prefillPatientId}
+          todayOnly={prefillTodayOnly} prefillDate={prefillDate} />;
       case "live-schedule":
         return (
           <LiveScheduleSection
@@ -5596,7 +5899,9 @@ export default function AdminApp({
       case "analytics":
         return <AnalyticsSection patients={patients} machines={machines} sessions={sessions} prescriptions={prescriptions} isAdmin />;
       default:
-        return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate} />;
+        return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate}
+          onAssignToday={assignPatientToday}
+          onUpdateSession={(id, payload) => applySessionUpdate(id, payload, {})} />;
     }
   };
 
