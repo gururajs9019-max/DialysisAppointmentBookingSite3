@@ -332,43 +332,6 @@ export function DoctorPrescription({
                       {conflict && <PrescriptionConflict key={draft.id} draft={draft} onResolve={reviewed => {
                         setEditDraft(reviewed); setConflict(false); setSaveError(null);
                       }} />}
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Diagnosis
-                          <input value={draft.diagnosis} onChange={event => setEditDraft({ ...draft, diagnosis: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Symptoms / clinical notes
-                          <textarea rows={2} value={draft.symptoms ?? ""}
-                            onChange={event => setEditDraft({ ...draft, symptoms: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Investigation findings
-                          <textarea rows={2} value={draft.investigationFindings ?? ""}
-                            onChange={event => setEditDraft({ ...draft, investigationFindings: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Doctor's advice
-                          <textarea rows={2} value={draft.advice ?? ""}
-                            onChange={event => setEditDraft({ ...draft, advice: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Dietary advice
-                          <textarea rows={2} value={draft.dietaryAdvice ?? ""}
-                            onChange={event => setEditDraft({ ...draft, dietaryAdvice: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Follow-up date
-                          <input type="date" value={draft.followUpDate ?? ""}
-                            onChange={event => setEditDraft({ ...draft, followUpDate: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
-                      </div>
                       {/* Dialysis Rx */}
                       <div>
                         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">

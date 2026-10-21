@@ -195,6 +195,11 @@ try {
   }
   await page.getByRole("button", { name: "Edit Prescription", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  for (const label of [
+    "Diagnosis", "Symptoms / clinical notes", "Investigation findings", "Doctor's advice", "Dietary advice", "Follow-up date",
+  ]) {
+    await expect(page.getByText(label, { exact: true })).toHaveCount(0);
+  }
   await expect(page.getByRole("columnheader", { name: "Quantity", exact: true })).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "Instructions", exact: true })).toHaveCount(0);
   const doctorSave = page.getByRole("button", { name: "Save Changes", exact: true });
@@ -209,6 +214,9 @@ try {
   const doctorRevisedMedical = (await db.query("SELECT * FROM prescriptions WHERE id=$1", [uiRows[0].id])).rows[0];
   assert.equal(doctorRevisedMedical.data.notes, "Synthetic UI notes after Doctor edit");
   assert.equal(doctorRevisedMedical.data.prescriptionDate, uiRows[0].data.prescriptionDate);
+  for (const field of ["diagnosis", "symptoms", "investigationFindings", "advice", "dietaryAdvice", "followUpDate"]) {
+    assert.equal(doctorRevisedMedical.data[field], uiRows[0].data[field], `Doctor edit preserves ${field}`);
+  }
   assert.equal(doctorRevisedMedical.data.medications[0].quantity, "3", "hidden quantity is preserved when a Doctor edits");
   assert.equal(doctorRevisedMedical.data.medications[0].instructions, "Synthetic UI instructions", "hidden instructions are preserved when a Doctor edits");
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
@@ -293,18 +301,26 @@ try {
   await expect(adminPage.getByText(doctorMedicalRecord.data.prescriptionDate, { exact: true })).toHaveCount(0);
   await adminPage.getByRole("button", { name: "Edit Prescription", exact: true }).click();
   await expect(adminPage.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  for (const label of [
+    "Diagnosis", "Symptoms / clinical notes", "Investigation findings", "Doctor's advice", "Dietary advice", "Follow-up date",
+  ]) {
+    await expect(adminPage.getByText(label, { exact: true })).toHaveCount(0);
+  }
   const editSave = adminPage.getByRole("button", { name: "Save Changes", exact: true });
   const clinicalNotes = adminPage.getByLabel("Clinical Notes", { exact: true });
   await editSave.scrollIntoViewIfNeeded();
   const saveTop = await editSave.evaluate(element => element.getBoundingClientRect().top);
   const notesTop = await clinicalNotes.evaluate(element => element.getBoundingClientRect().top);
   assert.ok(saveTop > notesTop, "Administrator Save Changes must appear after the prescription fields");
-  await adminPage.getByLabel("Diagnosis", { exact: true }).fill(`${run} Admin edited diagnosis`);
+  await clinicalNotes.fill(`${run} Admin updated notes`);
   await editSave.click();
   await expect(adminPage.getByText("Prescription changes saved successfully.", { exact: true })).toBeVisible();
   const adminRevisedMedical = (await db.query("SELECT * FROM prescriptions WHERE id=$1", [doctorMedicalRecord.id])).rows[0];
-  assert.equal(adminRevisedMedical.data.diagnosis, `${run} Admin edited diagnosis`);
+  assert.equal(adminRevisedMedical.data.notes, `${run} Admin updated notes`);
   assert.equal(adminRevisedMedical.data.prescriptionDate, doctorMedicalRecord.data.prescriptionDate, "the hidden date remains unchanged on edit");
+  for (const field of ["diagnosis", "symptoms", "investigationFindings", "advice", "dietaryAdvice", "followUpDate"]) {
+    assert.equal(adminRevisedMedical.data[field], doctorMedicalRecord.data[field], `Administrator edit preserves ${field}`);
+  }
   assert.equal(adminRevisedMedical.data.medications[0].quantity, "3", "hidden quantity stays stored after edits");
   assert.equal(adminRevisedMedical.data.medications[0].instructions, "Synthetic UI instructions", "hidden instructions stay stored after edits");
   await adminPage.getByRole("button", { name: "Create Prescription", exact: true }).click();
