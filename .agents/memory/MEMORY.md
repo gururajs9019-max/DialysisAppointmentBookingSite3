@@ -12,3 +12,4 @@
 - [HTTP upload safety](http-upload-safety.md) — Test byte limits over real TCP; default stream iteration can close a socket before its error reply.
 - [Registration clinical safety](registration-clinical-safety.md) — Simpler controls must preserve historical readings; registration weights remain independently entered values.
 - [Staff notification audience](staff-notification-audience.md) — Broad staff read access is not clinical responsibility; never broadcast prescription alerts to unrelated doctors.
+- [GitHub remote verification](github-remote-verification.md) — A connected GitHub chat integration does not guarantee shell Git auth; verify the remote target before pushing.
