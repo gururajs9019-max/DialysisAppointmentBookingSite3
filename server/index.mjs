@@ -151,10 +151,10 @@ function patientDto(row) { const data = row.data; return { id: row.id, uhid: row
 async function fetchPatient(client, id) {
   const row = (await client.query("SELECT * FROM patients WHERE id=$1", [id])).rows[0]; if (!row) throw httpError(404, "Patient was not found."); return row;
 }
-async function assertPatientNotAlreadyScheduled(client, patientId, date) {
+async function assertPatientNotAlreadyScheduled(client, patientId, date, excludeId = null) {
   const existing = await client.query(
-    "SELECT 1 FROM dialysis_sessions WHERE patient_id=$1 AND session_date=$2 AND status NOT IN ('cancelled','missed') LIMIT 1",
-    [patientId, date],
+    "SELECT 1 FROM dialysis_sessions WHERE patient_id=$1 AND session_date=$2 AND status NOT IN ('cancelled','missed') AND ($3::text IS NULL OR id<>$3) LIMIT 1",
+    [patientId, date, excludeId],
   );
   if (existing.rowCount) throw httpError(409, "This patient is already in the Live Schedule for this date.");
 }
@@ -166,7 +166,6 @@ async function createSession(input, actor) {
     await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE",[patientId]);
     const patient = await fetchPatient(client, patientId);
     if (patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be scheduled.");
-    await assertPatientNotAlreadyScheduled(client, patientId, date);
     const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 AND unit_id=$2 FOR UPDATE", [machineId, unitId])).rows[0];
     if (!machine) throw httpError(400, "Machine does not belong to the selected unit.");
     if (!["available", "scheduled", "in-use"].includes(machine.status)) throw httpError(409, machine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");
@@ -174,6 +173,7 @@ async function createSession(input, actor) {
     if (input.status && !SESSION_STATUSES.includes(input.status)) throw httpError(400, "Invalid session status.");
     const links = await validateSessionLinks(client, input, patientId, { text, httpError });
     const id = randomUUID(), status = input.status || "scheduled";
+    if (!["cancelled", "missed"].includes(status)) await assertPatientNotAlreadyScheduled(client, patientId, date);
     await assertSessionAvailable(client, { ...input, patientId, machineId, date, slot, status });
     try { await client.query("INSERT INTO dialysis_sessions(id,patient_id,machine_id,unit_id,session_date,slot,status,data,created_by,doctor_id,prescription_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", [id, patientId, machineId, unitId, date, slot, status, { ...input, ...links, date, slot }, actor.id, links.doctorId, links.prescriptionId]); }
     catch (e) { if (e.code === "23505") throw httpError(409, "Patient or machine is already booked for this date and slot."); throw e; }
@@ -404,6 +404,7 @@ export async function api(req, res, url) {
           if (x.status !== existing.status) throw httpError(409, "Rescheduling cannot also change the appointment status.");
           const patient = (await client.query("SELECT * FROM patients WHERE id=$1 FOR UPDATE", [existing.patient_id])).rows[0];
           if (!patient || patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be rescheduled.");
+          await assertPatientNotAlreadyScheduled(client, existing.patient_id, x.date, id);
           const lockedMachines = (await client.query(
             "SELECT * FROM dialysis_machines WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE",
             [[...new Set([existing.machine_id, x.machineId])].sort()],
@@ -429,6 +430,9 @@ export async function api(req, res, url) {
           }
           if (!["cancelled", "missed"].includes(x.status)) {
             await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE", [existing.patient_id]);
+            if (["cancelled", "missed"].includes(existing.status)) {
+              await assertPatientNotAlreadyScheduled(client, existing.patient_id, dateKey(existing.session_date), id);
+            }
             const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 FOR UPDATE", [existing.machine_id])).rows[0];
             if (["scheduled","waiting","called","running"].includes(x.status) && !["available","scheduled","in-use"].includes(machine.status)) {
               throw httpError(409, machine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");

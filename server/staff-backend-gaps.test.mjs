@@ -88,6 +88,21 @@ try {
   assert.equal(session.doctor, doctor.name, "the directory, not caller text, supplies the doctor name");
   assert.equal(session.prescriptionId, rx.id);
   assert.equal(session.status, "called");
+  const cancelledDuplicate = (await req("/api/sessions", admin, "POST", {
+    ...schedule, slot: "Slot 2", status: "cancelled",
+  }, 201)).session;
+  ids.sessions.push(cancelledDuplicate.id);
+  const reactivatedDuplicate = await req(`/api/sessions/${cancelledDuplicate.id}`, admin, "PATCH", { status: "waiting" }, 409);
+  assert.match(reactivatedDuplicate.error, /already in the Live Schedule/);
+  const followingDate = new Date(new Date(`${date}T00:00:00.000Z`).getTime() + 86400000).toISOString().slice(0, 10);
+  const nextDaySession = (await req("/api/sessions", admin, "POST", {
+    ...schedule, unitId: secondUnit.id, machineId: secondMachine.id, date: followingDate, slot: "Slot 1",
+  }, 201)).session;
+  ids.sessions.push(nextDaySession.id);
+  const duplicateReschedule = await req(`/api/sessions/${session.id}`, admin, "PATCH", {
+    status: session.status, machineId: secondMachine.id, unitId: secondUnit.id, date: followingDate, slot: "Slot 2",
+  }, 409);
+  assert.match(duplicateReschedule.error, /already in the Live Schedule/);
   const row = (await db.query("SELECT patient_id,doctor_id,prescription_id FROM dialysis_sessions WHERE id=$1", [session.id])).rows[0];
   assert.deepEqual(row, { patient_id: patient.id, doctor_id: doctor.id, prescription_id: rx.id });
   assert.equal((await db.query(`SELECT 1 FROM pg_constraint

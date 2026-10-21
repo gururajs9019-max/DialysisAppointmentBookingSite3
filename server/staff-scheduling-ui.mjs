@@ -20,8 +20,12 @@ export async function verifySchedulingLinksInBrowser({ base, patient, racePatien
     await expect(removeDoctorDialog).toBeVisible();
     await removeDoctorDialog.getByRole("button", { name: "Remove Doctor", exact: true }).click();
     await expect(page.getByText("Treating doctor removed.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Not assigned", { exact: true })).toBeVisible();
     const updatedPatient = await request(`/api/patients/${patient.id}`, admin);
     assert.equal(updatedPatient.patient.treatingNephrologist, "", "doctor removal persists on the patient record");
+    assert.equal(updatedPatient.patient.name, patient.name, "doctor removal leaves the patient's name unchanged");
+    assert.equal(updatedPatient.patient.uhid, patient.uhid, "doctor removal leaves the patient's identifier unchanged");
+    assert.equal(updatedPatient.patient.treatmentStatus, "Active", "doctor removal leaves unrelated clinical status unchanged");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button").filter({ has: page.getByText(unit.name, { exact: true }) }).first().click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -50,10 +54,12 @@ export async function verifySchedulingLinksInBrowser({ base, patient, racePatien
     const { session } = await response.json();
     assert.equal(session.doctorId, doctor.id); assert.equal(session.prescriptionId, rx.id);
     assert.equal(session.patientId, patient.id);
+    assert.equal(session.date, date, "the manually selected assignment date is saved");
     const persisted = (await request("/api/sessions", admin)).sessions.find(s => s.id === session.id);
     assert.equal(persisted.doctor, doctor.name);
     assert.equal(persisted.prescriptionId, rx.id);
     assert.equal(persisted.patientId, patient.id);
+    assert.equal(persisted.date, date, "the selected appointment date survives a fresh read");
     await page.getByRole("button", { name: "New Assignment", exact: true }).click();
     await page.getByRole("button").filter({ has: page.getByText(racePatient.name, { exact: true }) }).first().click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -78,12 +84,15 @@ export async function verifySchedulingLinksInBrowser({ base, patient, racePatien
       patientId: racePatient.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 1",
     }, 201);
     assert.equal(externallySaved.session.patientId, racePatient.id);
-    await page.getByRole("button", { name: "Assign Patient", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Assign Patient", exact: true }).click();
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
-    await expect(page.getByRole("dialog").getByRole("alert")).toContainText("already in the Live Schedule");
-    const racePatientSessions = (await request("/api/sessions", admin)).sessions.filter(s => s.patientId === racePatient.id && s.date === date);
+    const staleScheduleError = page.getByRole("alert").filter({ hasText: "You can retry without creating a duplicate." });
+    await expect(staleScheduleError).toContainText("already in the Live Schedule");
+    const racePatientSessions = (await request("/api/sessions", admin)).sessions.filter(s =>
+      s.patientId === racePatient.id && s.date === date && !["cancelled", "missed"].includes(String(s.status).toLowerCase())
+    );
     assert.equal(racePatientSessions.length, 1, "a schedule change made while the form is open prevents the duplicate save");
-    await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
     await page.getByLabel("Schedule date", { exact: true }).fill(date);
     const cardForStatus = status => page.getByRole("button")
