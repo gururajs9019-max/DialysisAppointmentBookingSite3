@@ -31,6 +31,12 @@ try {
     viralStatus: { hepatitisB: "Negative", hepatitisC: "Positive", hiv: "Unknown" },
   };
   const legacy = (await api("/api/patients", admin, "POST", legacyInput, 201)).patient;
+  legacyInput.investigations.cbc.hb = "10.0";
+  const partialInvestigationUpdate = await api(`/api/patients/${legacy.id}`, admin, "PATCH", {
+    investigations: { cbc: { hb: "10.0" } },
+  });
+  assert.deepEqual(partialInvestigationUpdate.patient.investigations, legacyInput.investigations,
+    "partial nested investigation edits preserve other saved investigation fields");
   for (const medicalInfo of [{ dryWeight: -1 }, { dryWeight: 0 }, { weightGain: -1 }, { dryWeight: "not numeric" }]) {
     await api(`/api/patients/${legacy.id}`, admin, "PATCH", { medicalInfo }, 400);
   }
@@ -62,7 +68,9 @@ try {
   await page.getByRole("checkbox", { name: "Diabetes", exact: true }).uncheck();
   await expect(page.getByRole("checkbox", { name: "Hypertension", exact: true })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Others", exact: true })).toBeChecked();
-  await expect(page.getByText("Specify Other Condition", { exact: true })).toHaveCount(0);
+  const otherComorbidities = page.getByLabel("Please specify other comorbidities", { exact: true });
+  await expect(otherComorbidities).toBeVisible();
+  await expect(otherComorbidities).toHaveAttribute("required", "");
 
   const serumIds = ["register-serum-ferritin", "register-serum-calcium", "register-serum-phosphorous"];
   const lftIds = ["total-protein", "albumin", "total-bilirubin", "direct-bilirubin", "ast", "alt", "alp"].map(id => `register-lft-${id}`);
@@ -92,16 +100,29 @@ try {
   await field("Patient Status *").selectOption("Active");
   await page.getByPlaceholder("e.g. Chronic Kidney Disease Stage 5").fill("Synthetic kidney disease");
   await field("AVF").fill("1");
-  await page.locator("label").filter({ hasText: "Dialysis Days Per Week" }).locator("..").getByRole("button").first().click();
+  const daysPerWeek = page.getByLabel("Dialysis Days Per Week", { exact: true });
+  await expect(daysPerWeek).toHaveValue("0");
+  await expect(daysPerWeek).toHaveAttribute("readonly", "");
   await page.getByRole("button", { name: "Monday", exact: true }).click();
+  await expect(daysPerWeek).toHaveValue("1");
+  await page.getByRole("button", { name: "Wednesday", exact: true }).click();
+  await expect(daysPerWeek).toHaveValue("2");
+  await page.getByRole("button", { name: "Friday", exact: true }).click();
+  await expect(daysPerWeek).toHaveValue("3");
+  await page.getByRole("button", { name: "Wednesday", exact: true }).click();
+  await expect(daysPerWeek).toHaveValue("2");
+  await page.getByRole("button", { name: "Wednesday", exact: true }).click();
+  await expect(daysPerWeek).toHaveValue("3");
   await page.getByRole("button", { name: "OPD", exact: true }).click();
   await page.getByLabel("Dry Weight (kg)", { exact: true }).fill("-1");
   await page.getByLabel("Weight Gain (kg)", { exact: true }).fill("-1");
   await page.getByRole("button", { name: "Register Patient", exact: true }).last().click();
   await expect(page.getByText("Dry weight must be a number greater than 0 kg.", { exact: true })).toBeVisible();
   await expect(page.getByText("Weight gain must be a number of at least 0 kg.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Please specify other comorbidities.", { exact: true })).toBeVisible();
   await page.getByLabel("Dry Weight (kg)", { exact: true }).fill("52.5");
   await page.getByLabel("Weight Gain (kg)", { exact: true }).fill("2.5");
+  await otherComorbidities.fill("Asthma and neuropathy");
   for (const [index, id] of serumIds.entries()) await page.locator(`#${id}`).fill(String(index + 8.5));
   for (const [index, id] of lftIds.entries()) await page.locator(`#${id}`).fill(String(index + 1.5));
   await page.locator("#register-viral-hcv").selectOption("Positive");
@@ -118,7 +139,10 @@ try {
   assert.equal(persisted.medicalInfo.dryWeight, 52.5);
   assert.equal(persisted.medicalInfo.weightGain, 2.5);
   assert.deepEqual(persisted.medicalInfo.comorbidityFlags, { hypertension: true, diabetes: false, others: true });
+  assert.equal(persisted.medicalInfo.otherComorbidities, "Asthma and neuropathy");
   assert.equal(persisted.comorbidities, "Hypertension, Others");
+  assert.equal(persisted.dialysisDaysPerWeek, 3);
+  assert.deepEqual(persisted.dialysisDays, ["Monday", "Friday", "Wednesday"]);
   assert.equal(persisted.causeOfFailure, undefined);
   assert.equal(persisted.treatingNephrologist, undefined);
   assert.deepEqual(persisted.viralStatus, { hepatitisB: "Negative", hepatitisC: "Positive", hiv: "Unknown", other: "" });
@@ -146,9 +170,10 @@ try {
   await expect(editor.getByRole("checkbox", { name: "Hypertension", exact: true })).toBeChecked();
   await expect(editor.getByRole("checkbox", { name: "Diabetes", exact: true })).not.toBeChecked();
   await expect(editor.getByRole("checkbox", { name: "Others", exact: true })).toBeChecked();
+  await expect(editor.getByLabel("Please specify other comorbidities", { exact: true })).toHaveValue("Asthma and neuropathy");
+  await editor.getByLabel("Please specify other comorbidities", { exact: true }).fill("Asthma, peripheral neuropathy");
   await editor.getByRole("checkbox", { name: "Hypertension", exact: true }).uncheck();
   await editor.getByRole("checkbox", { name: "Diabetes", exact: true }).check();
-  await editor.getByRole("checkbox", { name: "Others", exact: true }).uncheck();
   await editor.getByLabel("Dry Weight (kg)", { exact: true }).fill("53.75");
   await editor.getByLabel("Weight Gain (kg)", { exact: true }).fill("0");
   await editor.getByRole("button", { name: "Save Clinical Information", exact: true }).click();
@@ -161,12 +186,26 @@ try {
   await expect(editor.getByLabel("Weight Gain (kg)", { exact: true })).toHaveValue("0");
   await expect(editor.getByRole("checkbox", { name: "Hypertension", exact: true })).not.toBeChecked();
   await expect(editor.getByRole("checkbox", { name: "Diabetes", exact: true })).toBeChecked();
+  await expect(editor.getByRole("checkbox", { name: "Others", exact: true })).toBeChecked();
+  await expect(editor.getByLabel("Please specify other comorbidities", { exact: true })).toHaveValue("Asthma, peripheral neuropathy");
+  await editor.getByRole("checkbox", { name: "Others", exact: true }).uncheck();
+  await expect(editor.getByLabel("Please specify other comorbidities", { exact: true })).toHaveCount(0);
+  await editor.getByRole("button", { name: "Save Clinical Information", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  persisted = (await api(`/api/patients/${created.id}`, admin)).patient;
+  assert.equal(persisted.medicalInfo.otherComorbidities, "", "deselecting Others clears saved details");
+  assert.equal(persisted.comorbidities, "Diabetes");
+
+  await openAdmin("Treatment Status");
+  editor = await openEditor(created);
   await expect(editor.getByRole("checkbox", { name: "Others", exact: true })).not.toBeChecked();
+  await expect(editor.getByLabel("Please specify other comorbidities", { exact: true })).toHaveCount(0);
   await editor.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await openAdmin("Treatment Status");
   editor = await openEditor(legacy);
   for (const name of ["Hypertension", "Diabetes", "Others"]) await expect(editor.getByRole("checkbox", { name, exact: true })).toBeChecked();
+  await expect(editor.getByLabel("Please specify other comorbidities", { exact: true })).toHaveValue("name: Anaemia, value: 9.5");
   await editor.getByRole("checkbox", { name: "Hypertension", exact: true }).uncheck();
   await editor.getByLabel("Dry Weight (kg)", { exact: true }).fill("50.25");
   await editor.getByRole("button", { name: "Save Clinical Information", exact: true }).click();

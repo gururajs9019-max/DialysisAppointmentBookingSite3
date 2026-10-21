@@ -147,6 +147,18 @@ export function validatePatient(input, partial = false) {
   }
   return out;
 }
+function isJsonRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function mergeJsonRecord(existing, patch) {
+  const merged = isJsonRecord(existing) ? { ...existing } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    merged[key] = isJsonRecord(value) && isJsonRecord(merged[key])
+      ? mergeJsonRecord(merged[key], value)
+      : value;
+  }
+  return merged;
+}
 function patientDto(row) { const data = row.data; return { id: row.id, uhid: row.uhid, ...data, viralCategory: row.viral_category, treatmentStatus: row.lifecycle, viralStatus: data.viralStatus ?? {}, createdAt: row.created_at, updatedAt: row.updated_at }; }
 async function fetchPatient(client, id) {
   const row = (await client.query("SELECT * FROM patients WHERE id=$1", [id])).rows[0]; if (!row) throw httpError(404, "Patient was not found."); return row;
@@ -308,7 +320,17 @@ export async function api(req, res, url) {
       return true;
     }
     if (parts[1]==="patients" && parts.length===3 && req.method==="GET") { await requireStaff(req); sendJson(res,200,{patient:patientDto(await fetchPatient(pool,decodeURIComponent(parts[2])))}); return true; }
-    if (parts[1]==="patients" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]), values=validatePatient(await readJson(req),true); const row=await fetchPatient(pool,id); const lifecycle=values.treatmentStatus||row.lifecycle, data={...row.data,...values}; const r=await pool.query("UPDATE patients SET uhid=COALESCE($2,uhid),data=$3,viral_category=$4,lifecycle=$5,updated_at=now() WHERE id=$1 RETURNING *",[id,values.uhid||null,data,values.viralCategory||row.viral_category,lifecycle]); await transaction(c=>audit(c,actor,"patient.update","patient",id)); sendJson(res,200,{patient:patientDto(r.rows[0])}); return true; }
+    if (parts[1]==="patients" && parts.length===3 && req.method==="PATCH") {
+      const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]), values=validatePatient(await readJson(req),true);
+      const row=await fetchPatient(pool,id), lifecycle=values.treatmentStatus||row.lifecycle, data={...row.data,...values};
+      for (const key of ["medicalInfo","investigations","registrationFields","viralStatus"]) {
+        if (values[key] && isJsonRecord(values[key])) data[key]=mergeJsonRecord(row.data?.[key],values[key]);
+      }
+      const r=await pool.query("UPDATE patients SET uhid=COALESCE($2,uhid),data=$3,viral_category=$4,lifecycle=$5,updated_at=now() WHERE id=$1 RETURNING *",
+        [id,values.uhid||null,data,values.viralCategory||row.viral_category,lifecycle]);
+      await transaction(c=>audit(c,actor,"patient.update","patient",id));
+      sendJson(res,200,{patient:patientDto(r.rows[0])}); return true;
+    }
     if (parts[1]==="patients" && parts.length===4 && parts[3]==="treating-doctor" && req.method==="DELETE") {
       const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]);
       const patient=await transaction(async client=>{

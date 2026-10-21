@@ -352,6 +352,7 @@ try {
   await expect(adminDialysisForm.getByText(`${run} UI diagnosis`, { exact: true })).toHaveCount(0);
   const weeklyCount = adminDialysisForm.getByLabel("Weekly Dialysis Sessions", { exact: true });
   await expect(weeklyCount).toHaveValue("0");
+  await expect(weeklyCount).toHaveAttribute("readonly", "");
   await adminDialysisForm.getByRole("button", { name: "Monday", exact: true }).click();
   await adminDialysisForm.getByRole("button", { name: "Thursday", exact: true }).click();
   await adminDialysisForm.getByRole("button", { name: "Saturday", exact: true }).click();
@@ -387,6 +388,7 @@ try {
   await adminDialysisCard.getByRole("button", { name: "Edit Prescription", exact: true }).click();
   const editWeeklyCount = adminDialysisCard.getByLabel("Weekly Dialysis Sessions", { exact: true });
   await expect(editWeeklyCount).toHaveValue("3");
+  await expect(editWeeklyCount).toHaveAttribute("readonly", "");
   await expect(adminDialysisCard.getByRole("button", { name: "Sat", exact: true })).toHaveAttribute("aria-pressed", "true");
   await adminDialysisCard.getByRole("button", { name: "Sat", exact: true }).click();
   await expect(editWeeklyCount).toHaveValue("2");

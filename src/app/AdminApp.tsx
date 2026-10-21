@@ -14,7 +14,7 @@ import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPag
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
 import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
 import {
-  WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp,
+  DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp,
 } from "./lib/prescription-utils";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
@@ -157,6 +157,9 @@ export const ADMIN_RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis,"dialysisDays"
   { key: "dryWeight",           label: "Dry Weight" },
   { key: "anticoagulation",     label: "Anticoagulation" },
 ];
+function adminWeeklyCountFromDays(days: readonly string[]): string {
+  return String(new Set(days.filter(day => DIALYSIS_DAY_OPTIONS.includes(day))).size);
+}
 export interface RxMedication {
   name: string;
   dose: string;
@@ -3114,7 +3117,7 @@ function PatientHistorySection({ sessions, prescriptions }: { sessions: Dialysis
                           <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${v.status === "Active" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : v.status === "Revised" ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-red-100 text-red-700 border-red-200"}`}>{v.status}</span>
                         </div>
                         <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                          <div><p className="text-slate-400 font-semibold">Sessions/Week</p><p className="text-slate-700">{v.dialysisRx.weeklySessionsCount}</p></div>
+                          <div><p className="text-slate-400 font-semibold">Sessions/Week</p><p className="text-slate-700">{adminWeeklyCountFromDays(v.dialysisRx.dialysisDays)}</p></div>
                           <div><p className="text-slate-400 font-semibold">Days</p><p className="text-slate-700">{v.dialysisRx.dialysisDays.join(", ")}</p></div>
                           <div><p className="text-slate-400 font-semibold">Blood Flow</p><p className="text-slate-700">{v.dialysisRx.bloodFlow}</p></div>
                           <div><p className="text-slate-400 font-semibold">Membrane</p><p className="text-slate-700">{v.dialysisRx.membrane}</p></div>
@@ -3781,12 +3784,13 @@ function weightDetailValue(value: unknown): string {
 }
 
 function blankPrescription(patient: Patient): AdminPrescription {
+  const dialysisDays = [...new Set(patient.dialysisDays || [])];
   return {
     id: "", patientId: patient.id, patientName: patient.name, patientUhid: patient.uhid,
     diagnosis: patient.primaryDisease || "", status: "Active", issuedDate: "", updatedBy: "",
     updatedByRole: "Administrator", dialysisRx: {
-      weeklySessionsCount: patient.dialysisDaysPerWeek ? `${patient.dialysisDaysPerWeek} Sessions / Week` : "3 Sessions / Week",
-      dialysisDays: patient.dialysisDays || [], slot: "", duration: "4 Hours", bloodFlow: "", dialysateFlow: "",
+      weeklySessionsCount: adminWeeklyCountFromDays(dialysisDays),
+      dialysisDays, slot: "", duration: "4 Hours", bloodFlow: "", dialysateFlow: "",
       membrane: "", dryWeight: "", anticoagulation: "",
     },
     medications: [], notes: "", history: [],
@@ -3849,10 +3853,13 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
 
   const startEdit = (rx: AdminPrescription) => {
     if (!draftGuard.confirmDiscard()) return;
-    draftGuard.beginDraft(rx);
+    const next = JSON.parse(JSON.stringify(rx)) as AdminPrescription;
+    next.dialysisRx.dialysisDays = [...new Set(next.dialysisRx.dialysisDays || [])];
+    next.dialysisRx.weeklySessionsCount = adminWeeklyCountFromDays(next.dialysisRx.dialysisDays);
+    draftGuard.beginDraft(next);
     setConflict(false); setSaveError(null); setCreatingPatientId(null);
     setEditingRxId(rx.id);
-    setEditDraft(JSON.parse(JSON.stringify(rx)));
+    setEditDraft(next);
     setExpandedId(rx.patientId);
   };
   const startCreate = (patient: Patient) => {
@@ -3876,9 +3883,17 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
     setSavingRx(true);
     try {
       setSaveError(null);
+      const normalizedDraft = {
+        ...editDraft,
+        dialysisRx: {
+          ...editDraft.dialysisRx,
+          dialysisDays: [...new Set(editDraft.dialysisRx.dialysisDays)],
+          weeklySessionsCount: adminWeeklyCountFromDays(editDraft.dialysisRx.dialysisDays),
+        },
+      };
       const saved = creatingPatientId
-        ? await createPrescription(editDraft.patientId, editDraft)
-        : await updatePrescription(editDraft.id, { ...editDraft, updatedBy: adminName, updatedByRole: "Administrator" });
+        ? await createPrescription(normalizedDraft.patientId, normalizedDraft)
+        : await updatePrescription(normalizedDraft.id, { ...normalizedDraft, updatedBy: adminName, updatedByRole: "Administrator" });
       setPrescriptions(prev => [saved, ...prev.filter(rx => rx.id !== saved.id)]);
       setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null);
     } catch (error) {
@@ -4016,7 +4031,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         { label: "Today's Slot",    value: todaySess ? todaySess.slot : (p.currentSchedule ?? "—") },
                         { label: "Nephrologist",    value: p.treatingNephrologist },
                         { label: "Viral Status",    value: viralSummary(p) },
-                        { label: "Dialysis Days",   value: `${p.dialysisDaysPerWeek}× / week — ${p.dialysisDays.join(", ")}` },
+                        { label: "Dialysis Days",   value: `${adminWeeklyCountFromDays(p.dialysisDays)}× / week — ${p.dialysisDays.join(", ")}` },
                         { label: "Treatment Status",value: p.treatmentStatus },
                         { label: "Last Dialysis",   value: p.lastDialysis },
                       ].map(item => (
@@ -4102,9 +4117,9 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         </div>
                         <div>
                           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Weekly Dialysis Sessions</label>
-                          <select value={draft.dialysisRx.weeklySessionsCount} onChange={e => updateRxScalar("weeklySessionsCount", e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white">
-                            {WEEKLY_SESSION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                          </select>
+                          <input aria-label="Weekly Dialysis Sessions" type="number" min="0" readOnly
+                            value={adminWeeklyCountFromDays(draft.dialysisRx.dialysisDays)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 text-slate-600" />
                         </div>
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Dialysis Days</p>
@@ -4172,10 +4187,9 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Weekly Dialysis Sessions</label>
-                            <select value={draft.dialysisRx.weeklySessionsCount} onChange={e => updateRxScalar("weeklySessionsCount", e.target.value)}
-                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white">
-                              {WEEKLY_SESSION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                            </select>
+                            <input aria-label="Weekly Dialysis Sessions" type="number" min="0" readOnly
+                              value={adminWeeklyCountFromDays(draft.dialysisRx.dialysisDays)}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 text-slate-600" />
                           </div>
                           <div>
                             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Dialysis Days</label>
@@ -4286,7 +4300,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                           <div className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Weekly Sessions</p>
-                            <p className="text-sm font-semibold text-slate-700">{rx.dialysisRx.weeklySessionsCount}</p>
+                            <p className="text-sm font-semibold text-slate-700">{adminWeeklyCountFromDays(rx.dialysisRx.dialysisDays)}</p>
                           </div>
                           <div className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100 md:col-span-2">
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Dialysis Days</p>
@@ -4931,6 +4945,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
   const [nativeKidneyDisease, setNativeKidneyDisease] = useState("");
   const [insurance, setInsurance]                     = useState("");
   const [comorbidities, setComorbidities]             = useState<string[]>([]);
+  const [otherComorbidities, setOtherComorbidities]   = useState("");
   const [dryWeight, setDryWeight] = useState("");
   const [weightGain, setWeightGain] = useState("");
   const [remarks, setRemarks]                         = useState("");
@@ -4973,8 +4988,8 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
   const [opdIpd, setOpdIpd] = useState("");
 
   // Dialysis Schedule
-  const [dialysisDaysPerWeek, setDialysisDaysPerWeek] = useState<number | null>(null);
   const [dialysisDays, setDialysisDays] = useState<string[]>([]);
+  const dialysisDaysPerWeek = Number(adminWeeklyCountFromDays(dialysisDays));
 
   // Date of Birth (three separate selects — avoids browser native date-picker year scrolling)
   const [dobDay, setDobDay]     = useState("");
@@ -4997,6 +5012,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
     registrationDate:   useRef<HTMLDivElement>(null),
     patientStatus:      useRef<HTMLDivElement>(null),
     nativeKidneyDisease:useRef<HTMLDivElement>(null),
+    comorbidities:      useRef<HTMLDivElement>(null),
     dryWeight:          useRef<HTMLDivElement>(null),
     weightGain:         useRef<HTMLDivElement>(null),
     access:              useRef<HTMLDivElement>(null),
@@ -5008,6 +5024,12 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
   // ── Helpers ───────────────────────────────────────────────────────────────
   const toggleArr = (arr: string[], set: (v: string[]) => void, val: string) =>
     set(arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val]);
+
+  const toggleComorbidity = (condition: string) => {
+    const removing = comorbidities.includes(condition);
+    toggleArr(comorbidities, setComorbidities, condition);
+    if (condition === "Others" && removing) setOtherComorbidities("");
+  };
 
   const handleEf = (v: string) => {
     setEf(v);
@@ -5042,10 +5064,12 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
       e.access = "Please enter a value for at least one access type (AVF, Tunnelled Catheter, or Temporary Catheter).";
     if (!opdIpd)
       e.opdIpd = "Please select OPD or IPD.";
-    if (!dialysisDaysPerWeek)
-      e.dialysisDaysPerWeek = "Please select how many days per week the patient requires dialysis.";
-    if (dialysisDaysPerWeek && dialysisDays.length !== dialysisDaysPerWeek)
+    if (dialysisDaysPerWeek === 0)
+      e.dialysisDaysPerWeek = "Please select at least one dialysis day.";
+    if (dialysisDays.length !== dialysisDaysPerWeek)
       e.dialysisDays = `Please select exactly ${dialysisDaysPerWeek} dialysis day${dialysisDaysPerWeek !== 1 ? "s" : ""}.${dialysisDays.length > 0 ? ` (${dialysisDays.length} selected)` : ""}`;
+    if (comorbidities.includes("Others") && !otherComorbidities.trim())
+      e.comorbidities = "Please specify other comorbidities.";
     return e;
   };
 
@@ -5086,6 +5110,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             diabetes: comorbidities.includes("Diabetes"),
             others: comorbidities.includes("Others"),
           },
+          otherComorbidities: comorbidities.includes("Others") ? otherComorbidities.trim() : "",
           dryWeight: dryWeight === "" ? "" : Number(dryWeight),
           weightGain: weightGain === "" ? "" : Number(weightGain),
           avFistula: accessAvf, permacath: accessTunnelled, temporaryCatheter: accessTemporary, opdIpd,
@@ -5122,7 +5147,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           setName(""); setAge(""); setGender(""); setMobile(""); setAddress(""); setCity("");
           setRegistrationDate(""); setPatientStatus(""); setNativeKidneyDisease("");
           setInsurance("");
-          setComorbidities([]); setDryWeight(""); setWeightGain("");
+          setComorbidities([]); setOtherComorbidities(""); setDryWeight(""); setWeightGain("");
           setRemarks(""); setAccessAvf(""); setAccessTunnelled(""); setAccessTemporary(""); setOpdIpd("");
           setCbcHb(""); setCbcTlc(""); setCbcPlt(""); setCbcMcv("");
           setSerumFerritin(""); setSerumCalcium("");
@@ -5132,7 +5157,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           setLftTotalProtein(""); setLftAlbumin(""); setLftTotalBilirubin("");
           setLftDirectBilirubin(""); setLftAst(""); setLftAlt(""); setLftAlp("");
           setHbsAg("Negative"); setHcv("Negative"); setHiv("Negative");
-          setDialysisDaysPerWeek(null); setDialysisDays([]);
+          setDialysisDays([]);
           setDobDay(""); setDobMonth(""); setDobYear("");
         }} className="px-6 py-2.5 bg-violet-600 text-white rounded-xl font-semibold hover:bg-violet-700">
           Register Another Patient
@@ -5286,7 +5311,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
               className={fldCls(false)} placeholder="Scheme or None" />
           </div>
 
-          <div className="md:col-span-2">
+          <div ref={refs.comorbidities} className="md:col-span-2">
             <label className={labelCls}>Comorbidities</label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1">
               {(["Hypertension", "Diabetes", "Others"] as const).map(condition => (
@@ -5297,12 +5322,21 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
                       : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
                   }`}>
                   <input type="checkbox" checked={comorbidities.includes(condition)}
-                    onChange={() => toggleArr(comorbidities, setComorbidities, condition)}
+                    onChange={() => toggleComorbidity(condition)}
                     className="h-4 w-4 accent-violet-600" />
                   {condition}
                 </label>
               ))}
             </div>
+            {comorbidities.includes("Others") && (
+              <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
+                <label htmlFor="register-other-comorbidities" className={labelCls}>Please specify other comorbidities *</label>
+                <input id="register-other-comorbidities" aria-label="Please specify other comorbidities"
+                  required value={otherComorbidities} onChange={event => setOtherComorbidities(event.target.value)}
+                  className={fldCls(!!errors.comorbidities)} placeholder="Enter other comorbidities" />
+                <RegErrMsg error={errors.comorbidities} />
+              </div>
+            )}
           </div>
 
           <div className="md:col-span-2">
@@ -5531,22 +5565,11 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
             Dialysis Days Per Week *
             {errors.dialysisDaysPerWeek && <span className="ml-2 text-red-500 normal-case font-normal text-[10px]">(required)</span>}
           </label>
-          <div className="flex flex-wrap gap-2">
-            {[1,2,3,4,5,6,7].map(n => (
-              <button key={n} type="button"
-                onClick={() => {
-                  setDialysisDaysPerWeek(n);
-                  // If more days selected than new limit, trim selection
-                  if (dialysisDays.length > n) setDialysisDays(dialysisDays.slice(0, n));
-                }}
-                className={`px-4 py-2 rounded-xl border-2 text-sm font-bold transition-all ${
-                  dialysisDaysPerWeek === n
-                    ? "border-violet-500 bg-violet-50 text-violet-800"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
-                }`}>
-                {n} {n === 1 ? "day" : "days"}
-              </button>
-            ))}
+          <div className="max-w-xs">
+            <input aria-label="Dialysis Days Per Week" type="number" min="0" max="7" readOnly
+              value={dialysisDaysPerWeek}
+              className={`w-full px-3 py-2.5 rounded-xl border text-sm bg-slate-50 text-slate-600 ${errors.dialysisDaysPerWeek ? "border-red-400" : "border-slate-200"}`} />
+            <p className="mt-1 text-xs text-slate-400">Calculated from the selected dialysis weekdays.</p>
           </div>
           <RegErrMsg error={errors.dialysisDaysPerWeek} />
         </div>
@@ -5555,32 +5578,28 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
         <div ref={refs.dialysisDays}>
           <label className={labelCls}>
             Dialysis Days *
-            {dialysisDaysPerWeek && (
+            {dialysisDaysPerWeek > 0 && (
               <span className="ml-2 normal-case font-normal text-slate-400 text-[11px]">
                 Select exactly {dialysisDaysPerWeek} day{dialysisDaysPerWeek !== 1 ? "s" : ""} · {dialysisDays.length}/{dialysisDaysPerWeek} selected
               </span>
             )}
           </label>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(day => {
+            {DIALYSIS_DAY_OPTIONS.map(day => {
               const isSelected = dialysisDays.includes(day);
-              const atLimit = dialysisDaysPerWeek !== null && dialysisDays.length >= dialysisDaysPerWeek && !isSelected;
               return (
                 <button key={day} type="button"
-                  disabled={atLimit}
                   onClick={() => {
                     if (isSelected) {
                       setDialysisDays(dialysisDays.filter(d => d !== day));
-                    } else if (!atLimit) {
+                    } else {
                       setDialysisDays([...dialysisDays, day]);
                     }
                   }}
                   className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 text-sm font-medium transition-all text-left ${
                     isSelected
                       ? "border-violet-500 bg-violet-50 text-violet-800"
-                      : atLimit
-                        ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed"
-                        : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"
                   }`}>
                   <div className={`w-4 h-4 rounded flex items-center justify-center border-2 shrink-0 ${
                     isSelected ? "border-violet-500 bg-violet-500" : "border-slate-300"
@@ -5592,7 +5611,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
               );
             })}
           </div>
-          {dialysisDaysPerWeek && dialysisDays.length > 0 && dialysisDays.length !== dialysisDaysPerWeek && (
+          {dialysisDaysPerWeek > 0 && dialysisDays.length !== dialysisDaysPerWeek && (
             <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />
               {dialysisDays.length < dialysisDaysPerWeek
@@ -5603,7 +5622,7 @@ function RegisterPatientSection({ onCreated }: { onCreated: (patient: Patient) =
           <RegErrMsg error={errors.dialysisDays} />
         </div>
 
-        {dialysisDaysPerWeek && dialysisDays.length === dialysisDaysPerWeek && (
+        {dialysisDaysPerWeek > 0 && dialysisDays.length === dialysisDaysPerWeek && (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center gap-2 text-sm text-emerald-800">
             <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>

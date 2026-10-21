@@ -1,0 +1,104 @@
+# Replit Prompt: Auto-Calculate Dialysis Days and Add "Others" Input Fields
+
+Update the existing Admin Portal, specifically the **Register Patient** page and the **Dialysis Schedule** page, to implement the following features. Inspect the existing frontend, backend, and database structure before making changes. Preserve all existing functionality and UI styling.
+
+## 1. Automatically Calculate Days Per Week
+
+Apply this feature to both the **Register Patient** page and the **Dialysis Schedule** page.
+
+### Requirements
+- Whenever the admin selects or deselects dialysis weekdays, automatically calculate the total number of unique selected days per week.
+- Update the displayed number immediately without requiring the admin to enter it manually.
+- If the number of days per week is displayed in an input field, automatically populate it and make it read-only.
+- When editing an existing patient or schedule, initialize the selected weekdays from saved data and calculate the correct count.
+- Save the selected weekdays and the calculated number of days per week consistently in the existing database structure.
+
+### Examples
+
+| Selected dialysis days | Days per week |
+|---|---:|
+| Monday, Wednesday, Friday | 3 |
+| Monday, Tuesday, Wednesday, Thursday | 4 |
+| Tuesday, Saturday | 2 |
+| All seven weekdays | 7 |
+| No days selected | 0 |
+
+### Implementation rules
+- Count unique weekdays only.
+- Recalculate immediately whenever the selection changes.
+- Apply the same calculation logic to both pages.
+- Ensure the saved value remains correct after refreshing or reopening the page.
+- Preserve existing validation rules and schedule functionality.
+- Do not add unnecessary database columns if an appropriate field already exists.
+
+## 2. Add Input Cards When "Others" Is Selected
+
+In the Admin Portal, on the **Register Patient** page, inside the **Medical Information** section and the **Comorbidities** section, update all relevant fields that include an **"Others"** option.
+
+### Expected behavior
+Whenever the admin selects **Others** from a dropdown, checkbox group, radio group, or other existing selection control, display an appropriate input card or text input field where the admin can specify the details.
+
+For example:
+
+**Medical Information**
+
+- Existing options: Diabetes, Hypertension, Heart Disease, Others.
+- When the admin selects Others, display a text input card labelled **"Please specify other medical information"**.
+- Allow the admin to enter the relevant medical information.
+
+**Comorbidities**
+
+- Keep all existing comorbidity options.
+- When the admin selects Others, display a text input card labelled **"Please specify other comorbidities"**.
+- Allow the admin to enter the relevant comorbidities.
+
+Use the actual options already present in the application. The examples above are illustrative and must not replace or remove existing options.
+
+### Input field behavior
+- Display the input field immediately when Others is selected.
+- Hide the field when Others is deselected.
+- Make the input required only while Others is selected.
+- Display a clear validation message if Others is selected but no details are entered.
+- Preserve the entered text when the user interacts with other fields or changes unrelated selections.
+- If an existing patient's saved medical information or comorbidities includes other details, populate the input field when editing that patient.
+- If Others is deselected, do not accidentally retain stale "Other" values in the submitted data.
+- Ensure the conditional fields work correctly on both new patient registration and existing patient editing, wherever those workflows are available.
+
+### Database integration
+- Save the specified medical information and comorbidities to the existing patient record using the current data model.
+- Ensure the entered details persist after saving and refreshing the page.
+- Reuse existing database fields or structured data formats wherever possible.
+- Do not overwrite existing medical information, comorbidities, or unrelated patient details.
+- Maintain compatibility with the current backend, API, and database validation.
+
+## 3. UI and Code Requirements
+
+- Reuse the application's existing form components, input cards, validation styles, and design system.
+- Keep the interface consistent with the rest of the Admin Portal.
+- Use reactive state so conditional fields and calculated values update immediately.
+- Avoid duplicate fields, duplicate database columns, and unnecessary redesigns.
+- Preserve existing authentication, permissions, patient records, and scheduling workflows.
+- Do not introduce mock data or hardcoded patient values.
+
+## 4. Testing Checklist
+
+After implementing both features, verify the following:
+
+1. Selecting three dialysis days automatically displays 3 days per week.
+2. Adding or removing a dialysis day immediately updates the count.
+3. The correct count is saved and remains correct after refreshing.
+4. The same behavior works on Register Patient and Dialysis Schedule.
+5. Selecting Others in Medical Information displays its corresponding input card.
+6. Selecting Others in Comorbidities displays its corresponding input card.
+7. Deselecting Others hides the relevant input and prevents stale data from being submitted.
+8. Submitting the form while Others is selected with an empty input shows a validation message.
+9. Entered Other details are saved correctly and appear when editing the patient later.
+10. Existing patient data and unrelated application features remain unaffected.
+
+## Final Instructions
+
+First inspect the existing implementation and identify where these fields and scheduling values are managed. Then implement and test the actual frontend, backend, and database changes required. Do not merely change the visual interface.
+
+When finished, provide a summary of the files changed, database changes if any, and the tests performed. Mention any remaining issues that require manual configuration.
+
+**Expected result:** Dialysis days per week are calculated automatically on both relevant pages, and selecting Others in Medical Information or Comorbidities reveals a conditional input card whose details are validated, saved, and restored correctly.

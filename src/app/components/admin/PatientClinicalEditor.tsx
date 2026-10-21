@@ -44,6 +44,27 @@ function existingComorbidityFlags(patient: Patient): ComorbidityFlags {
         : conditions.some(value=>value.toLowerCase().includes(key)) || recorded(medical[key]),
   ])) as ComorbidityFlags;
 }
+function displayOtherComorbidityValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map(displayOtherComorbidityValue).filter(Boolean).join(", ");
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        const detail = displayOtherComorbidityValue(item);
+        return detail ? `${key}: ${detail}` : "";
+      })
+      .filter(Boolean)
+      .join(", ");
+  }
+  return value === null || value === undefined ? "" : String(value);
+}
+function existingOtherComorbidityDetails(patient: Patient): string {
+  const saved = displayOtherComorbidityValue(patient.medicalInfo?.otherComorbidities);
+  if (saved) return saved;
+  return (patient.comorbidities || "").split(",").map(value => value.trim()).filter(value =>
+    value && !/hypertension|diabetes/i.test(value) && !["others", "none", "no"].includes(value.toLowerCase())
+  ).join(", ");
+}
 function getValue(patient: Patient, path: string): string {
   const value=path.split(".").reduce<any>((obj,key)=>obj?.[key],patient);
   return value === null || value === undefined ? "" : String(value);
@@ -59,10 +80,14 @@ export function PatientClinicalEditor({ patient, onSaved, onClose }: {
 }) {
   const [draft,setDraft]=useState(()=>Object.fromEntries(fields.map(([path])=>[path,getValue(patient,path)])));
   const [comorbidityFlags,setComorbidityFlags]=useState(()=>existingComorbidityFlags(patient));
+  const [otherComorbidities,setOtherComorbidities]=useState(()=>existingOtherComorbidityDetails(patient));
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState<string|null>(null);
   const save=async(event:React.FormEvent)=>{
     event.preventDefault();if(saving)return;
+    if(comorbidityFlags.others && !otherComorbidities.trim()) {
+      setError("Please specify other comorbidities.");return;
+    }
     const changes: Record<string,any>={};
     for (const [path,label] of fields) {
       if(weightFields.has(path) && draft[path]!==getValue(patient,path) && draft[path] !== "" &&
@@ -73,13 +98,30 @@ export function PatientClinicalEditor({ patient, onSaved, onClose }: {
         putValue(changes,path,weightFields.has(path) && draft[path]!=="" ? Number(draft[path]) : draft[path]);
     }
     const originalFlags=existingComorbidityFlags(patient);
-    if(comorbidityOptions.some(([key])=>comorbidityFlags[key]!==originalFlags[key])) {
+    const originalOtherDetails=existingOtherComorbidityDetails(patient);
+    const flagsChanged=comorbidityOptions.some(([key])=>comorbidityFlags[key]!==originalFlags[key]);
+    const otherDetailsChanged=otherComorbidities.trim()!==originalOtherDetails.trim();
+    const othersTurnedOff=originalFlags.others&&!comorbidityFlags.others;
+    if(flagsChanged||otherDetailsChanged) {
       changes.medicalInfo ||= {};
-      changes.medicalInfo.comorbidityFlags={...comorbidityFlags};
+      if(flagsChanged) {
+        changes.medicalInfo.comorbidityFlags={
+          ...((patient.medicalInfo?.comorbidityFlags as Partial<ComorbidityFlags>|undefined)||{}),
+          ...comorbidityFlags,
+        };
+      }
+      if(othersTurnedOff) changes.medicalInfo.otherComorbidities="";
+      else if(otherDetailsChanged) changes.medicalInfo.otherComorbidities=otherComorbidities.trim();
       // Preserve named historical conditions and legacy readings; only the
       // three checkbox labels are replaced by the current selections.
-      const legacy=(patient.comorbidities || "").split(",").map(value=>value.trim()).filter(value=>
-        value && !comorbidityOptions.some(([,label])=>label.toLowerCase()===value.toLowerCase()));
+      const oldDetails=originalOtherDetails.toLowerCase();
+      const legacy=(patient.comorbidities || "").split(",").map(value=>value.trim()).filter(value=>{
+        if(!value||comorbidityOptions.some(([,label])=>label.toLowerCase()===value.toLowerCase())) return false;
+        const isCommonCondition=/hypertension|diabetes/i.test(value);
+        if(othersTurnedOff) return isCommonCondition;
+        if(otherDetailsChanged && !isCommonCondition && oldDetails.includes(value.toLowerCase())) return false;
+        return true;
+      });
       const selected=comorbidityOptions.filter(([key])=>comorbidityFlags[key] && !legacy.some(value=>
         key==="others" ? !(/hypertension|diabetes/i).test(value) : value.toLowerCase().includes(key)));
       changes.comorbidities=[...legacy,...selected.map(([,label])=>label)].join(", ");
@@ -108,10 +150,22 @@ export function PatientClinicalEditor({ patient, onSaved, onClose }: {
             <p className="text-xs text-slate-600 font-semibold mb-2">Comorbidities</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {comorbidityOptions.map(([key,label])=><label key={key} className="flex items-center gap-2 p-2.5 border border-slate-200 rounded-xl text-sm text-slate-700">
-                <input type="checkbox" checked={comorbidityFlags[key]} onChange={event=>setComorbidityFlags(previous=>({...previous,[key]:event.target.checked}))}
+                <input type="checkbox" checked={comorbidityFlags[key]} onChange={event=>{
+                  const checked=event.target.checked;
+                  setComorbidityFlags(previous=>({...previous,[key]:checked}));
+                  if(key==="others"&&!checked) setOtherComorbidities("");
+                  setError(null);
+                }}
                   className="h-4 w-4 accent-violet-600" />{label}
               </label>)}
             </div>
+            {comorbidityFlags.others&&<label className="mt-3 block rounded-xl border border-violet-200 bg-violet-50/40 p-4 text-xs text-slate-600 font-semibold">
+              Please specify other comorbidities *
+              <input aria-label="Please specify other comorbidities" value={otherComorbidities} required
+                onChange={event=>{setOtherComorbidities(event.target.value);setError(null);}}
+                onInvalid={()=>setError("Please specify other comorbidities.")}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet-300" />
+            </label>}
           </div>}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {group.fields.map(([path,label])=><label key={path} className="text-xs text-slate-600 font-semibold">{label}
