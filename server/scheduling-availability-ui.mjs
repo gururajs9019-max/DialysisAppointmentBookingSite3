@@ -34,7 +34,12 @@ export async function verifyAvailabilityBrowser({ base, patients, main, spare, m
     await assignToday(patients[0]);
     await chooseUnit(firstUnit);
     await expect(page.getByLabel("Machine availability time slot")).toHaveValue("Slot 2");
-    await expect(page.getByLabel("Machine availability date")).toHaveAttribute("readonly", "");
+    const localToday = await page.evaluate(() => {
+      const current = new Date();
+      return `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`;
+    });
+    await expect(page.getByLabel("Machine availability date")).toHaveValue(localToday);
+    await expect(page.getByLabel("Machine availability date")).toHaveAttribute("type", "date");
     await expect(machineCard(maintenance)).toBeDisabled();
     await expect(machineCard(maintenance)).toContainText("Under Maintenance");
     await machineCard(main).click();

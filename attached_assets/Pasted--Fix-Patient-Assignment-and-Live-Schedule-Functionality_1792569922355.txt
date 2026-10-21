@@ -1,0 +1,86 @@
+## Fix Patient Assignment and Live Schedule Functionality in Admin Portal
+
+Analyze the existing codebase, database schema, frontend, and backend, and implement the following changes in the Admin Portal. Reuse the existing components, database tables, APIs, and styling wherever possible. Do not create duplicate functionality or dummy data.
+
+### 1. Update the Patient Selection Details in "Assign Patient"
+
+In the Admin Portal, when I click **Assign Patient** and select a particular patient, update the patient details/assignment section as follows:
+
+- **Remove Treating Doctor:** Include a working option to remove the currently assigned treating doctor from the selected patient. When clicked, it should remove the doctor assignment from the database and update the UI immediately after successful completion. Ask for confirmation before removing the doctor.
+- **Assign Date:** Automatically populate the assignment date with the current day's date by default.
+- The assignment date must be **editable** using a suitable date picker.
+- Use the correct local date and avoid timezone-related date shifts.
+- Save the selected date to the database when the patient is assigned.
+- If the assignment date is changed manually, save the updated date rather than overwriting it with today's date.
+
+### 2. Fix the Patient Assignment Bug
+
+Currently, when I assign a patient from the **Assign Patient** page, the patient is not getting assigned properly.
+
+Investigate the complete assignment flow and identify the actual cause of the issue. Fix it in both the frontend and backend as required.
+
+Requirements:
+- Ensure the selected patient's correct ID is passed to the assignment API or database operation.
+- Ensure the selected treating doctor, assignment date, and other required fields are saved correctly.
+- Verify that the database insert/update operation succeeds and that errors are handled properly.
+- Update the UI only after the assignment has been successfully saved.
+- Display a clear success message after a successful assignment and a meaningful error message if it fails.
+- Refresh or invalidate the relevant data so the assigned patient appears in the correct patient list and live schedule wherever applicable.
+- Prevent duplicate assignments and duplicate submissions caused by repeated clicks.
+- Preserve existing authentication, role-based permissions, database relationships, and validation rules.
+
+Do not simply change the UI to show that a patient is assigned. The assignment must persist correctly in the actual database and remain correct after refreshing the page.
+
+### 3. Make Patients Already in the Live Schedule Unclickable
+
+On the **Assign Patient** page, check whether each patient is already present in the active Live Schedule.
+
+If a patient is already in the Live Schedule:
+- Make that patient's selection control disabled and unclickable.
+- Visually distinguish the patient from selectable patients using the existing UI design, such as a disabled checkbox or button and a label reading **"Already in Live Schedule"**.
+- Prevent the patient from being selected through mouse clicks, keyboard interaction, or other frontend selection methods.
+- Do not allow the patient to be assigned again through the assignment API, even if someone bypasses the frontend.
+- Keep patients who are not in the Live Schedule selectable and assignable.
+- If a patient's Live Schedule status changes while the Assign Patient page is open, refresh or revalidate their status before completing the assignment.
+
+Use the existing Live Schedule data and the correct patient identifiers to determine whether a patient is already scheduled. Do not rely only on patient names or a stale frontend list.
+
+### 4. Database and Backend Validation
+
+Inspect the current database schema and assignment logic before making changes.
+
+- Reuse the existing patient, doctor, assignment, and Live Schedule tables or collections.
+- Verify that the assignment operation writes to the correct table and updates the fields used by the Live Schedule.
+- Enforce duplicate-assignment prevention on the backend, ideally using an atomic database operation or transaction and an appropriate database constraint where supported.
+- Handle concurrent assignment attempts safely.
+- Do not overwrite unrelated patient or doctor information when saving an assignment.
+- If the project uses Supabase, verify the relevant queries, foreign keys, Row Level Security policies, and permissions.
+- Keep the implementation compatible with the project's existing technology stack.
+
+### 5. Test the Complete Workflow
+
+After implementing the fixes, test these scenarios:
+
+1. Open Admin Portal → Assign Patient → select an available patient.
+2. Confirm that the assignment date defaults to today's date.
+3. Change the assignment date and verify that the selected date is saved correctly.
+4. Assign the patient and verify that the database record is created or updated correctly.
+5. Refresh the page and verify that the assignment persists.
+6. Verify that the assigned patient appears in the appropriate Live Schedule and patient lists.
+7. Open Assign Patient again and verify that the patient already in the Live Schedule is disabled and cannot be selected.
+8. Attempt to assign that patient through the backend and verify that the duplicate assignment is rejected.
+9. Verify that other eligible patients can still be assigned normally.
+10. Test the Remove Treating Doctor option and confirm that it removes only the doctor relationship without accidentally deleting the patient or unrelated records.
+11. Test error cases, loading states, and repeated clicks.
+
+### Important Instructions
+
+- First inspect the existing implementation and identify the root causes before modifying code.
+- Implement the actual fixes, not just recommendations or a proposed solution.
+- Do not redesign unrelated pages or change the existing UI unnecessarily.
+- Do not delete existing data, change unrelated database schemas, or introduce mock data.
+- Preserve all existing working features.
+- If a database migration is necessary, create a safe migration compatible with the existing data.
+- At the end, summarize the root cause, files changed, database changes if any, and tests performed. Clearly mention anything that still requires manual configuration.
+
+**Expected result:** Patient assignment works reliably, the assignment date defaults to today but remains editable, the treating doctor can be removed safely, and patients already in the Live Schedule cannot be selected or assigned again.

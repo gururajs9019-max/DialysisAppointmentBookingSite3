@@ -312,6 +312,11 @@ export async function fetchPatientById(id: string): Promise<Patient> {
   return asPatient(result.patient);
 }
 
+export async function fetchSessions(): Promise<DialysisSession[]> {
+  const result = await request<{ sessions: Record<string, unknown>[] }>("/api/sessions");
+  return result.sessions.map(asSession);
+}
+
 export async function createPrescription(patientId: string, prescription: AdminPrescription): Promise<AdminPrescription> {
   await request("/api/prescriptions", {
     method: "POST",
@@ -380,6 +385,14 @@ export const createClinicalNote = (patientId: string, body: string, data?: Clini
 export const updateClinicalNote = (id: string, baseVersion: number, body: string, data?: ClinicalNoteDto["data"]) => request<{ note: ClinicalNoteDto }>(`/api/clinical-notes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ baseVersion, body, data }) }, "save");
 export const updatePatient = async (id: string, changes: Partial<Patient>) => {
   const r = await request<{ patient: Partial<Patient> }>(`/api/patients/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }, "save");
+  return asPatient(r.patient);
+};
+export const removeTreatingDoctor = async (id: string) => {
+  const r = await request<{ patient: Partial<Patient> }>(
+    `/api/patients/${encodeURIComponent(id)}/treating-doctor`,
+    { method: "DELETE" },
+    "save",
+  );
   return asPatient(r.patient);
 };
 export interface StaffAccount {

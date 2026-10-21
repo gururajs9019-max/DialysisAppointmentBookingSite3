@@ -1,13 +1,13 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useStaffSync } from "./lib/useStaffSync";
 import { usePrescriptionLeaveGuard, usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "./lib/usePrescriptionLeaveGuard";
-import { updatePatient, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData, type StaffNotification } from "./lib/staffApi";
+import { updatePatient, removeTreatingDoctor, fetchStaffAccounts, createStaffAccount, updateStaffAccount, type StaffData, type StaffNotification } from "./lib/staffApi";
 import { AdminAuthPortal, AdminData } from "./components/admin/AdminAuthPortal";
 import { AnalyticsSection } from "./components/admin/AnalyticsSection";
 import { PatientClinicalEditor } from "./components/admin/PatientClinicalEditor";
 import { ScheduleClinicalLinks, type ScheduleLinks } from "./components/admin/ScheduleClinicalLinks";
 import { logoutStaff } from "./lib/appointmentApi";
-import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, fetchSchedulingOptions, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
+import { createMachine, createPatient, createPrescription, createSession, fetchPatientById, fetchSchedulingOptions, fetchSessions, loadStaffData, markNotificationRead, markAllNotificationsRead, openNotificationTarget, updateMachine, updatePrescription, updateSession, PrescriptionConflictError, type SessionUpdatePayload } from "./lib/staffApi";
 import { localDateKey } from "./lib/scheduleDateMapping.mjs";
 import { appointmentsOverlap, blocksReservation, prescriptionSlot, MACHINE_RESERVED_MESSAGE } from "../../shared/scheduling.mjs";
 import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
@@ -538,7 +538,12 @@ function validateAssignment(draft: AssignmentDraft, sessions: DialysisSession[],
   if (machine.status === "maintenance") errors.push(`${machine.number} is under maintenance.`);
   if (machine.status === "disabled") errors.push(`${machine.number} is disabled.`);
 
-  const conflict = sessions.find(s =>
+  const alreadyInLiveSchedule = sessions.some(s =>
+    s.id !== excludeId && s.patientId === draft.patient!.id && s.date === draft.date && blocksReservation(s)
+  );
+  if (alreadyInLiveSchedule) errors.push(`${draft.patient.name} is already in the Live Schedule for ${draft.date}.`);
+
+  const conflict = alreadyInLiveSchedule ? undefined : sessions.find(s =>
     s.id !== excludeId && s.patientId === draft.patient!.id &&
     blocksReservation(s) && appointmentsOverlap(s, booking)
   );
@@ -676,11 +681,16 @@ function WizardStep({ n, label, active, done }: { n: number; label: string; acti
 
 // ─── Step 1: Select Patient ───────────────────────────────────────────────────
 
-function Step1SelectPatient({ patients, selected, onSelect }: {
-  patients: Patient[]; selected: Patient | null; onSelect: (p: Patient) => void;
+function Step1SelectPatient({ patients, selected, sessions, date, onSelect, onPatientUpdated }: {
+  patients: Patient[]; selected: Patient | null; sessions: DialysisSession[]; date: string;
+  onSelect: (p: Patient) => void; onPatientUpdated: (patient: Patient) => void;
 }) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<TreatmentStatus | "All">("Active");
+  const [confirmRemoveDoctor, setConfirmRemoveDoctor] = useState(false);
+  const [removingDoctor, setRemovingDoctor] = useState(false);
+  const [doctorUpdateError, setDoctorUpdateError] = useState<string | null>(null);
+  const [doctorUpdateMessage, setDoctorUpdateMessage] = useState<string | null>(null);
 
   const filtered = useMemo(() => patients.filter(p => {
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.uhid.toLowerCase().includes(search.toLowerCase());
@@ -709,11 +719,17 @@ function Step1SelectPatient({ patients, selected, onSelect }: {
       <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
         {filtered.map(p => {
           const isSelected = selected?.id === p.id;
+          const alreadyInLiveSchedule = sessions.some(session =>
+            session.patientId === p.id && session.date === date && blocksReservation(session)
+          );
           const req = getRequiredCategory(p);
           return (
-            <button key={p.id} onClick={() => onSelect(p)}
-              className={`w-full text-left p-4 rounded-2xl border-2 transition-all hover:shadow-md ${
-                isSelected ? "border-violet-500 bg-violet-50 shadow-lg shadow-violet-100" : "border-slate-100 bg-white hover:border-violet-200"
+            <button key={p.id} onClick={() => { if (!alreadyInLiveSchedule) onSelect(p); }}
+              disabled={alreadyInLiveSchedule}
+              className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
+                alreadyInLiveSchedule ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-65"
+                  : isSelected ? "border-violet-500 bg-violet-50 shadow-lg shadow-violet-100"
+                    : "border-slate-100 bg-white hover:border-violet-200 hover:shadow-md"
               }`}>
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="flex-1 min-w-0">
@@ -721,6 +737,7 @@ function Step1SelectPatient({ patients, selected, onSelect }: {
                     <p className="font-bold text-slate-800">{p.name}</p>
                     <TreatmentBadge status={p.treatmentStatus} />
                     {isSelected && <span className="text-[10px] font-bold bg-violet-600 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                    {alreadyInLiveSchedule && <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">Already in Live Schedule</span>}
                   </div>
                   <p className="text-xs text-slate-400">{p.uhid} · {p.bloodGroup} · {p.age} yrs · {p.gender}</p>
                   <p className="text-xs text-slate-500 mt-1 truncate">{p.primaryDisease}</p>
@@ -742,6 +759,65 @@ function Step1SelectPatient({ patients, selected, onSelect }: {
           <div className="py-10 text-center text-slate-400 text-sm">No patients found.</div>
         )}
       </div>
+
+      {selected && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Treating Doctor</p>
+              <p className="mt-1 text-sm font-semibold text-slate-700">
+                {selected.treatingNephrologist?.trim() || "Not assigned"}
+              </p>
+            </div>
+            {selected.treatingNephrologist?.trim() && (
+              <button type="button" disabled={removingDoctor}
+                onClick={() => { setDoctorUpdateError(null); setDoctorUpdateMessage(null); setConfirmRemoveDoctor(true); }}
+                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+                Remove Treating Doctor
+              </button>
+            )}
+          </div>
+          {doctorUpdateMessage && <p role="status" className="mt-2 text-xs text-emerald-700">{doctorUpdateMessage}</p>}
+          {doctorUpdateError && <p role="alert" className="mt-2 text-xs text-red-700">{doctorUpdateError}</p>}
+        </div>
+      )}
+
+      {confirmRemoveDoctor && selected?.treatingNephrologist?.trim() && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="remove-treating-doctor-title"
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 id="remove-treating-doctor-title" className="text-base font-bold text-slate-800">Remove treating doctor?</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Remove {selected.treatingNephrologist} from {selected.name}'s patient record? Existing dialysis session records will not be changed.
+            </p>
+            {doctorUpdateError && <p role="alert" className="mt-3 text-sm text-red-700">{doctorUpdateError}</p>}
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" disabled={removingDoctor} onClick={() => setConfirmRemoveDoctor(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="button" disabled={removingDoctor}
+                onClick={async () => {
+                  setRemovingDoctor(true);
+                  setDoctorUpdateError(null);
+                  try {
+                    const updated = await removeTreatingDoctor(selected.id);
+                    onPatientUpdated(updated);
+                    setDoctorUpdateMessage("Treating doctor removed.");
+                    setConfirmRemoveDoctor(false);
+                  } catch (error) {
+                    setDoctorUpdateError(error instanceof Error ? error.message : "The treating doctor could not be removed.");
+                  } finally {
+                    setRemovingDoctor(false);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                {removingDoctor ? "Removing…" : "Remove Doctor"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -877,12 +953,9 @@ function Step3SelectMachine({ machines, patient, unit, selected, onSelect, sessi
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
           Appointment date
-          {todayOnly
-            ? <input aria-label="Machine availability date" type="text" value={date} readOnly
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm normal-case tracking-normal" />
-            : <input aria-label="Machine availability date" type="date" value={date} onChange={e => onDateChange(e.target.value)}
-                min={localDateKey(new Date())}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal" />}
+          <input aria-label="Machine availability date" type="date" value={date} onChange={e => onDateChange(e.target.value)}
+            min={localDateKey(new Date())}
+            className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal" />
         </label>
         <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
           Time slot
@@ -1137,11 +1210,9 @@ function Step4Schedule({ draft, onChange, validation, units, todayOnly = false, 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Date *</label>
-          {todayOnly
-            ? <input type="text" aria-label="Appointment date" className={inputCls} value={draft.date} readOnly />
-            : <input type="date" aria-label="Appointment date" className={inputCls} value={draft.date}
-                onChange={e => onChange("date", e.target.value)}
-                min={localDateKey(new Date())} />}
+          <input type="date" aria-label="Appointment date" className={inputCls} value={draft.date}
+            onChange={e => onChange("date", e.target.value)}
+            min={localDateKey(new Date())} />
         </div>
         <ScheduleClinicalLinks key={draft.patient?.id} patientId={draft.patient?.id} value={draft} hideTreatingDoctor={todayOnly}
           onChange={links => { for (const key of ["doctor", "doctorId", "prescriptionId"] as const) onChange(key, links[key]); }} />
@@ -1236,16 +1307,18 @@ function ConfirmationDialog({ draft, validation, onConfirm, onCancel, isSubmitti
 
 // ─── Assign Patient Section (4-step wizard) ───────────────────────────────────
 
-function AssignPatientSection({ patients, machines, units, sessions, onAssigned, prefillMachine, prefillPatientId, todayOnly = false, prefillDate }: {
+function AssignPatientSection({ patients, machines, units, sessions, onAssigned, onSessionsRefresh, onPatientUpdated, prefillMachine, prefillPatientId, todayOnly = false, prefillDate }: {
   patients: Patient[]; machines: Machine[]; units: DialysisUnit[];
   sessions: DialysisSession[];
   onAssigned: (session: DialysisSession, machineId: string) => Promise<void>;
+  onSessionsRefresh: (sessions: DialysisSession[]) => void;
+  onPatientUpdated: (patient: Patient) => void;
   prefillMachine?: Machine | null;
   prefillPatientId?: string | null;
   todayOnly?: boolean;
   prefillDate?: string | null;
 }) {
-  const assignedDate = todayOnly ? localDateKey(new Date()) : prefillDate ?? "";
+  const assignedDate = todayOnly ? localDateKey(new Date()) : prefillDate || localDateKey(new Date());
   const prefillUnit = prefillMachine
     ? units.find(u => u.id === prefillMachine.unit) ?? null
     : null;
@@ -1361,6 +1434,9 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
   const submitValidation = prescriptionLoading || prescriptionError
     ? { ...validation, ok: false }
     : validation;
+  const patientAlreadyScheduled = Boolean(draft.patient && sessions.some(session =>
+    session.patientId === draft.patient!.id && session.date === draft.date && blocksReservation(session)
+  ));
 
   const slotReady = draft.slotType === "normal" ? !!draft.slot && draft.slot !== "Emergency"
     : draft.slotType === "emergency" ? !!draft.emergencyTime
@@ -1382,10 +1458,27 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     ))
   );
   const canProceed: Record<number, boolean> = {
-    1: !!draft.patient,
-    2: !!draft.unit && !prescriptionLoading,
-    3: !!draft.machine && selectedMachineValid,
+    1: !!draft.patient && !patientAlreadyScheduled,
+    2: !!draft.unit && !prescriptionLoading && !patientAlreadyScheduled,
+    3: !!draft.machine && selectedMachineValid && !patientAlreadyScheduled,
     4: !!draft.date && !!draft.slotType && slotReady && submitValidation.ok,
+  };
+  const handleSelectPatient = (patient: Patient) => {
+    if (sessions.some(session => session.patientId === patient.id && session.date === draft.date && blocksReservation(session))) return;
+    if (patient.id !== draft.patient?.id) {
+      slotOverridden.current = false; defaultAppliedKey.current = ""; prescriptionLoadedFor.current = null;
+      setScheduleOptions([]); setPrescriptionError("");
+      setDraft(current => ({
+        ...current, patient, prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
+        machine: null, unit: null,
+      }));
+      return;
+    }
+    setDraft(current => ({ ...current, patient }));
+  };
+  const handlePatientUpdated = (patient: Patient) => {
+    onPatientUpdated(patient);
+    setDraft(current => current.patient?.id === patient.id ? { ...current, patient } : current);
   };
 
   const handleConfirm = async () => {
@@ -1416,7 +1509,18 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
     submissionInFlight.current = true;
     setIsSubmitting(true);
     setSubmissionError(null);
-    try { await onAssigned(newSession, draft.machine!.id); setShowConfirm(false); setStep("success"); }
+    try {
+      const latestSessions = await fetchSessions();
+      onSessionsRefresh(latestSessions);
+      const latestValidation = validateAssignment(draft, latestSessions, machines);
+      if (!latestValidation.ok) {
+        setSubmissionError(latestValidation.errors.join(" "));
+        return;
+      }
+      await onAssigned(newSession, draft.machine!.id);
+      setShowConfirm(false);
+      setStep("success");
+    }
     catch (error) { setSubmissionError(error instanceof Error ? error.message : "Assignment could not be saved. Check your connection and try again."); }
     finally { submissionInFlight.current = false; setIsSubmitting(false); }
   };
@@ -1486,23 +1590,19 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
             <span>{prefillError} Search for a patient below to choose one manually.</span>
           </div>
         )}
+        {patientAlreadyScheduled && (
+          <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            {draft.patient?.name} is already in the Live Schedule for {draft.date}. Choose a different date or patient.
+          </div>
+        )}
         {step === 1 && (
           <>
             <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">1</span>
               Select Patient
             </h3>
-            <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => {
-                if (p.id !== draft.patient?.id) {
-                  slotOverridden.current = false; defaultAppliedKey.current = ""; prescriptionLoadedFor.current = null;
-                  setScheduleOptions([]); setPrescriptionError("");
-                }
-                setDraft(d => p.id === d.patient?.id ? { ...d, patient: p } : {
-                  ...d, patient: p, prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
-                  machine: null, unit: null,
-                });
-              }} />
+            <Step1SelectPatient patients={patients} selected={draft.patient} sessions={sessions} date={draft.date}
+              onSelect={handleSelectPatient} onPatientUpdated={handlePatientUpdated} />
           </>
         )}
         {step === 2 && draft.patient && (
@@ -1544,17 +1644,8 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
               <span className="w-6 h-6 bg-violet-600 text-white rounded-full text-xs flex items-center justify-center font-bold">1</span>
               Select Patient
             </h3>
-            <Step1SelectPatient patients={patients} selected={draft.patient}
-              onSelect={p => {
-                if (p.id !== draft.patient?.id) {
-                  slotOverridden.current = false; defaultAppliedKey.current = ""; prescriptionLoadedFor.current = null;
-                  setScheduleOptions([]); setPrescriptionError("");
-                }
-                setDraft(d => p.id === d.patient?.id ? { ...d, patient: p } : {
-                  ...d, patient: p, prescriptionId: "", slot: "", slotType: "", startTime: "", endTime: "", emergencyTime: "",
-                  machine: null, unit: null,
-                });
-              }} />
+            <Step1SelectPatient patients={patients} selected={draft.patient} sessions={sessions} date={draft.date}
+              onSelect={handleSelectPatient} onPatientUpdated={handlePatientUpdated} />
           </>
         )}
         {step === 4 && (
@@ -1608,7 +1699,7 @@ function AssignPatientSection({ patients, machines, units, sessions, onAssigned,
         )}
 
         {step === 4 && (
-          <button onClick={() => setShowConfirm(true)} disabled={!canProceed[4]}
+          <button onClick={() => { setSubmissionError(null); setShowConfirm(true); }} disabled={!canProceed[4]}
             className="flex items-center gap-2 px-6 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-lg shadow-violet-100">
             <CalendarPlus className="w-4 h-4" /> Assign Patient
           </button>
@@ -6216,7 +6307,8 @@ export default function AdminApp({
           onAssignToday={assignPatientToday} />;
       case "assign-patient":
         return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions}
-          onAssigned={handleAssigned} prefillMachine={prefillMachine} prefillPatientId={prefillPatientId}
+          onAssigned={handleAssigned} onSessionsRefresh={setSessions} onPatientUpdated={onPatientUpdated}
+          prefillMachine={prefillMachine} prefillPatientId={prefillPatientId}
           todayOnly={prefillTodayOnly} prefillDate={prefillDate} />;
       case "live-schedule":
         return (

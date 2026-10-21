@@ -142,7 +142,8 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await page.getByRole("button", { name: /^Slot 1/ }).click();
     const appointmentDateField = page.getByLabel("Appointment date");
     assert.equal(await appointmentDateField.inputValue(), assignmentDate, "Today assignment must default to the browser's local date");
-    assert.equal(await appointmentDateField.getAttribute("readonly"), "", "Today assignment date must be read-only");
+    assert.equal(await appointmentDateField.getAttribute("type"), "date", "Today assignment date must use an editable date picker");
+    assert.equal(await appointmentDateField.getAttribute("readonly"), null, "Today assignment date must remain editable");
     assert.equal(await page.getByLabel("Treating Doctor").count(), 0, "Today assignment must not require or display a treating doctor selector");
     const unitsRefreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/units");
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));

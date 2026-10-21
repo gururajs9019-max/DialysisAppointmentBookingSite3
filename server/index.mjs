@@ -151,6 +151,13 @@ function patientDto(row) { const data = row.data; return { id: row.id, uhid: row
 async function fetchPatient(client, id) {
   const row = (await client.query("SELECT * FROM patients WHERE id=$1", [id])).rows[0]; if (!row) throw httpError(404, "Patient was not found."); return row;
 }
+async function assertPatientNotAlreadyScheduled(client, patientId, date) {
+  const existing = await client.query(
+    "SELECT 1 FROM dialysis_sessions WHERE patient_id=$1 AND session_date=$2 AND status NOT IN ('cancelled','missed') LIMIT 1",
+    [patientId, date],
+  );
+  if (existing.rowCount) throw httpError(409, "This patient is already in the Live Schedule for this date.");
+}
 async function createSession(input, actor) {
   object(input); const patientId = text(input.patientId, "patientId", { required: true, max: 100 }), machineId = text(input.machineId, "machineId", { required: true, max: 100 }), unitId = text(input.unitId, "unitId", { required: true, max: 100 });
   const date = dateOnly(text(input.date, "date", { required: true, max: 10 }), "date"), slot = text(input.slot, "slot", { required: true, max: 80 });
@@ -159,6 +166,7 @@ async function createSession(input, actor) {
     await client.query("SELECT id FROM patients WHERE id=$1 FOR UPDATE",[patientId]);
     const patient = await fetchPatient(client, patientId);
     if (patient.lifecycle !== "Active") throw httpError(409, "Only active patients can be scheduled.");
+    await assertPatientNotAlreadyScheduled(client, patientId, date);
     const machine = (await client.query("SELECT * FROM dialysis_machines WHERE id=$1 AND unit_id=$2 FOR UPDATE", [machineId, unitId])).rows[0];
     if (!machine) throw httpError(400, "Machine does not belong to the selected unit.");
     if (!["available", "scheduled", "in-use"].includes(machine.status)) throw httpError(409, machine.status === "maintenance" ? "Machine is under maintenance." : "Machine is disabled.");
@@ -301,6 +309,20 @@ export async function api(req, res, url) {
     }
     if (parts[1]==="patients" && parts.length===3 && req.method==="GET") { await requireStaff(req); sendJson(res,200,{patient:patientDto(await fetchPatient(pool,decodeURIComponent(parts[2])))}); return true; }
     if (parts[1]==="patients" && parts.length===3 && req.method==="PATCH") { const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]), values=validatePatient(await readJson(req),true); const row=await fetchPatient(pool,id); const lifecycle=values.treatmentStatus||row.lifecycle, data={...row.data,...values}; const r=await pool.query("UPDATE patients SET uhid=COALESCE($2,uhid),data=$3,viral_category=$4,lifecycle=$5,updated_at=now() WHERE id=$1 RETURNING *",[id,values.uhid||null,data,values.viralCategory||row.viral_category,lifecycle]); await transaction(c=>audit(c,actor,"patient.update","patient",id)); sendJson(res,200,{patient:patientDto(r.rows[0])}); return true; }
+    if (parts[1]==="patients" && parts.length===4 && parts[3]==="treating-doctor" && req.method==="DELETE") {
+      const actor=await requireStaff(req,"admin"), id=decodeURIComponent(parts[2]);
+      const patient=await transaction(async client=>{
+        const result=await client.query(
+          "UPDATE patients SET data=data || jsonb_build_object('treatingNephrologist',''),updated_at=now() WHERE id=$1 RETURNING *",
+          [id],
+        );
+        if(!result.rowCount) throw httpError(404,"Patient was not found.");
+        const saved=patientDto(result.rows[0]);
+        await audit(client,actor,"patient.treating_doctor.remove","patient",id);
+        return saved;
+      });
+      sendJson(res,200,{patient}); return true;
+    }
 
     if (path === "/api/units" && req.method==="GET") { await requireStaff(req); sendJson(res,200,{units:(await pool.query("SELECT id,name,active,created_at FROM dialysis_units ORDER BY name")).rows}); return true; }
     if (path === "/api/units" && req.method==="POST") {

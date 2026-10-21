@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium, expect } from "@playwright/test";
 
-export async function verifySchedulingLinksInBrowser({ base, patient, unit, machine, doctor, rx, date, request, admin }) {
+export async function verifySchedulingLinksInBrowser({ base, patient, racePatient, unit, machine, secondUnit, secondMachine, doctor, rx, date, request, admin }) {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -15,9 +15,22 @@ export async function verifySchedulingLinksInBrowser({ base, patient, unit, mach
     await page.getByRole("heading", { name: /Today's Dialysis Patients/ }).waitFor();
     await page.getByRole("button", { name: "Assign Patient", exact: true }).first().click();
     await page.getByRole("button").filter({ has: page.getByText(patient.name, { exact: true }) }).first().click();
+    await page.getByRole("button", { name: "Remove Treating Doctor", exact: true }).click();
+    const removeDoctorDialog = page.getByRole("dialog", { name: "Remove treating doctor?" });
+    await expect(removeDoctorDialog).toBeVisible();
+    await removeDoctorDialog.getByRole("button", { name: "Remove Doctor", exact: true }).click();
+    await expect(page.getByText("Treating doctor removed.", { exact: true })).toBeVisible();
+    const updatedPatient = await request(`/api/patients/${patient.id}`, admin);
+    assert.equal(updatedPatient.patient.treatingNephrologist, "", "doctor removal persists on the patient record");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button").filter({ has: page.getByText(unit.name, { exact: true }) }).first().click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
+    const browserToday = await page.evaluate(() => {
+      const current = new Date();
+      return `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`;
+    });
+    assert.equal(await page.getByLabel("Machine availability date", { exact: true }).inputValue(), browserToday,
+      "the assignment date defaults to the browser's local calendar date");
     await page.getByRole("button").filter({ has: page.getByText(machine.code, { exact: true }) }).first().click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: /Normal Slot/ }).click();
@@ -36,9 +49,41 @@ export async function verifySchedulingLinksInBrowser({ base, patient, unit, mach
     assert.equal(response.status(), 201);
     const { session } = await response.json();
     assert.equal(session.doctorId, doctor.id); assert.equal(session.prescriptionId, rx.id);
+    assert.equal(session.patientId, patient.id);
     const persisted = (await request("/api/sessions", admin)).sessions.find(s => s.id === session.id);
     assert.equal(persisted.doctor, doctor.name);
     assert.equal(persisted.prescriptionId, rx.id);
+    assert.equal(persisted.patientId, patient.id);
+    await page.getByRole("button", { name: "New Assignment", exact: true }).click();
+    await page.getByRole("button").filter({ has: page.getByText(racePatient.name, { exact: true }) }).first().click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button").filter({ has: page.getByText(secondUnit.name, { exact: true }) }).first().click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByLabel("Machine availability date", { exact: true }).fill(date);
+    await page.getByRole("button").filter({ has: page.getByText(secondMachine.code, { exact: true }) }).first().click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    const alreadyScheduledPatient = page.getByRole("button").filter({ has: page.getByText(patient.name, { exact: true }) }).first();
+    await expect(alreadyScheduledPatient).toBeDisabled();
+    await expect(alreadyScheduledPatient).toContainText("Already in Live Schedule");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: /Normal Slot/ }).click();
+    await page.getByRole("button", { name: /Slot 1/ }).click();
+    await page.getByLabel("Appointment date", { exact: true }).fill(date);
+    const externallySaved = await request("/api/sessions", admin, "POST", {
+      patientId: racePatient.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 1",
+    }, 201);
+    assert.equal(externallySaved.session.patientId, racePatient.id);
+    await page.getByRole("button", { name: "Assign Patient", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText("already in the Live Schedule");
+    const racePatientSessions = (await request("/api/sessions", admin)).sessions.filter(s => s.patientId === racePatient.id && s.date === date);
+    assert.equal(racePatientSessions.length, 1, "a schedule change made while the form is open prevents the duplicate save");
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
     await page.getByLabel("Schedule date", { exact: true }).fill(date);
     const cardForStatus = status => page.getByRole("button")

@@ -47,7 +47,7 @@ try {
     unitId: secondUnit.id, code: `${run}-second`, name: `${run} second machine`, category: "Negative",
   }, 201)).machine;
   ids.machines.push(secondMachine.id);
-  const patientInput = { name: `${run} patient`, uhid: run, treatmentStatus: "Active" };
+  const patientInput = { name: `${run} patient`, uhid: run, treatmentStatus: "Active", treatingNephrologist: doctor.name };
   const patient = (await req("/api/patients", admin, "POST", patientInput, 201)).patient;
   ids.patients.push(patient.id);
   const other = (await req("/api/patients", admin, "POST", { ...patientInput, name: `${run} other`, uhid: `${run}-other` }, 201)).patient;
@@ -83,12 +83,13 @@ try {
     ...schedule, doctorId: doctor.id, doctor: "Untrusted display text", prescriptionId: rx.id, status: "called",
   }, 201)).session;
   ids.sessions.push(session.id);
+  assert.equal(session.patientId, patient.id, "the selected patient ID is persisted on the session");
   assert.equal(session.doctorId, doctor.id);
   assert.equal(session.doctor, doctor.name, "the directory, not caller text, supplies the doctor name");
   assert.equal(session.prescriptionId, rx.id);
   assert.equal(session.status, "called");
-  const row = (await db.query("SELECT doctor_id,prescription_id FROM dialysis_sessions WHERE id=$1", [session.id])).rows[0];
-  assert.deepEqual(row, { doctor_id: doctor.id, prescription_id: rx.id });
+  const row = (await db.query("SELECT patient_id,doctor_id,prescription_id FROM dialysis_sessions WHERE id=$1", [session.id])).rows[0];
+  assert.deepEqual(row, { patient_id: patient.id, doctor_id: doctor.id, prescription_id: rx.id });
   assert.equal((await db.query(`SELECT 1 FROM pg_constraint
     WHERE conrelid='dialysis_sessions'::regclass AND conname='session_patient_prescription'`)).rowCount, 1);
   await assert.rejects(
@@ -98,6 +99,25 @@ try {
   );
   await assert.rejects(db.query("UPDATE dialysis_sessions SET doctor_id='missing' WHERE id=$1", [session.id]), e => e.code === "23503");
   await req("/api/sessions", admin, "POST", schedule, 409);
+  await req("/api/sessions", admin, "POST", { ...schedule, slot: "Slot 2" }, 409);
+
+  const racePatient = (await req("/api/patients", admin, "POST", {
+    name: `${run} concurrent patient`, uhid: `${run}-race`, treatmentStatus: "Active",
+  }, 201)).patient;
+  ids.patients.push(racePatient.id);
+  const raceAttempts = await Promise.all(["Slot 2", "Slot 3"].map(async slot => {
+    const response = await fetch(`${base}/api/sessions`, {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: admin },
+      body: JSON.stringify({ ...schedule, patientId: racePatient.id, slot }),
+    });
+    return { status: response.status, body: await response.json() };
+  }));
+  assert.deepEqual(raceAttempts.map(result => result.status).sort((a, b) => a - b), [201, 409],
+    "concurrent assignments cannot put the same patient into the same day's Live Schedule twice");
+  const winningRaceSession = raceAttempts.find(result => result.status === 201).body.session;
+  assert.ok(winningRaceSession);
+  ids.sessions.push(winningRaceSession.id);
+  await req(`/api/sessions/${winningRaceSession.id}`, admin, "PATCH", { status: "cancelled" });
   assert.equal((await req(`/api/sessions/${session.id}`, doctorCookie, "PATCH", { status: "waiting" })).session.status, "waiting");
   assert.equal((await req(`/api/sessions/${session.id}`, doctorCookie, "PATCH", { status: "called", vitals: { bp: "120/80" } })).session.vitals.bp, "120/80");
   const listed = (await req("/api/machines", admin)).machines.find(m => m.id === machine.id);
@@ -144,17 +164,27 @@ try {
   const cancelled = (await req(`/api/sessions/${session.id}`, admin, "PATCH", { status: "cancelled" })).session;
   assert.equal(cancelled.id, session.id, "cancellation must retain the appointment row");
   assert.equal(cancelled.status, "cancelled");
+  const targetPatient = (await req("/api/patients", admin, "POST", {
+    name: `${run} target patient`, uhid: `${run}-target`, treatmentStatus: "Active",
+  }, 201)).patient;
+  ids.patients.push(targetPatient.id);
   const targetSlotReused = (await req("/api/sessions", admin, "POST", {
-    patientId: other.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 3",
+    patientId: targetPatient.id, unitId: secondUnit.id, machineId: secondMachine.id, date, slot: "Slot 3",
   }, 201)).session;
   ids.sessions.push(targetSlotReused.id);
 
+  const unassignedPatient = (await req("/api/patients", admin, "POST", {
+    name: `${run} unassigned patient`, uhid: `${run}-unassigned`, treatmentStatus: "Active",
+  }, 201)).patient;
+  ids.patients.push(unassignedPatient.id);
   await req(`/api/patients/${patient.id}`, admin, "PATCH", { treatmentStatus: "Temporarily inactive" });
   assert.equal((await req("/api/sessions", doctorCookie)).sessions.find(s => s.id === session.id).status, "cancelled");
   await req(`/api/patients/${patient.id}`, admin, "PATCH", { treatmentStatus: "Active" });
   // Unassigned sessions remain supported; pre-existing clinical history is not
   // retroactively assigned by guessing names or the latest prescription.
-  const unassigned = (await req("/api/sessions", admin, "POST", { ...schedule, slot: "Slot 2" }, 201)).session;
+  const unassigned = (await req("/api/sessions", admin, "POST", {
+    ...schedule, patientId: unassignedPatient.id, slot: "Slot 2",
+  }, 201)).session;
   ids.sessions.push(unassigned.id);
   assert.equal(unassigned.doctorId, null); assert.equal(unassigned.prescriptionId, null);
 
@@ -182,7 +212,9 @@ try {
     const history = (await db.query("SELECT snapshot FROM prescription_versions WHERE prescription_id='DEMO-RX001' AND version=1")).rows;
     assert.deepEqual(history.map(h => h.snapshot), [demo.data], "demo v1 has exactly one initial saved snapshot");
   }
-  await verifySchedulingLinksInBrowser({ base, patient, other, unit, machine, doctor, rx, date, request: req, admin });
+  await verifySchedulingLinksInBrowser({
+    base, patient, other, racePatient, unit, machine, secondUnit, secondMachine, doctor, rx, date, request: req, admin,
+  });
   console.log("staff backend gap tests passed (Called lifecycle, clinical-link API validation/options and FK, audit rollback, seed history, scheduling UI)");
 } finally {
   if (constraintInstalled) await db.query(`ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS ${constraint}`);
