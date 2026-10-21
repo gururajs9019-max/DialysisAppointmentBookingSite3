@@ -21,7 +21,7 @@ import {
   Users, ChevronDown, ClipboardCheck, Ban, SkipForward, HeartHandshake,
   MapPin, Phone, TrendingUp, Zap, ScrollText, UserCheck, UserX,
   ChevronUp, BarChart3, Pill, Plus, Filter, Building2, Tag,
-  Trash2, EyeOff, Lock
+  Trash2, EyeOff, Lock, MoreVertical
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -2266,7 +2266,7 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
 
 const WEEK_DAYS_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-function DashboardPatientDetailsDialog({ patient, session, units, machines, sessions, selectedDate, todayDate, onAssign, onUpdate, onClose }: {
+function DashboardPatientDetailsDialog({ patient, session, units, machines, sessions, selectedDate, todayDate, initialMode = "details", onAssign, onUpdate, onClose }: {
   patient: Patient;
   session?: DialysisSession;
   units: DialysisUnit[];
@@ -2274,11 +2274,12 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
   sessions: DialysisSession[];
   selectedDate: string;
   todayDate: string;
+  initialMode?: "details" | "reschedule" | "cancel";
   onAssign: (todayOnly: boolean) => void;
   onUpdate: (id: string, payload: SessionUpdatePayload) => Promise<void>;
   onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"details" | "reschedule" | "cancel">("details");
+  const [mode, setMode] = useState<"details" | "reschedule" | "cancel">(session ? initialMode : "details");
   const [unitId, setUnitId] = useState(session?.unit ?? "");
   const [machineId, setMachineId] = useState(session?.machineId ?? "");
   const [slot, setSlot] = useState(session?.slot || SLOTS[0].label);
@@ -2549,10 +2550,17 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
               <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 Are you sure you want to cancel this dialysis appointment for {patient.name}? The appointment record will be retained for history.
               </p>
+              <div className="rounded-xl border border-slate-100 p-3 text-sm text-slate-700">
+                <p><span className="font-semibold">Date:</span> {session.date}</p>
+                <p><span className="font-semibold">Slot:</span> {session.slotType === "emergency"
+                  ? `Emergency · ${session.emergencyTime || session.startTime}`
+                  : `${session.slot} · ${session.startTime} – ${session.endTime}`}</p>
+                <p><span className="font-semibold">Unit / machine:</span> {selectedUnitName} · {session.machine}</p>
+              </div>
               {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button type="button" disabled={saving} onClick={() => { setError(null); setMode("details"); }}
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Cancel</button>
+                <button type="button" disabled={saving} onClick={onClose}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Keep Slot</button>
                 <button type="button" disabled={saving} onClick={cancelAppointment}
                   className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-wait disabled:opacity-60">
                   {saving ? "Cancelling…" : "Confirm Cancellation"}
@@ -2576,7 +2584,26 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
   const todayDate = localDateKey(new Date());
   const [selectedDate, setSelectedDate] = useState(todayDate);
   const [openedPatientId, setOpenedPatientId] = useState<string | null>(null);
+  const [openedPatientMode, setOpenedPatientMode] = useState<"details" | "reschedule" | "cancel">("details");
+  const [openMenuPatientId, setOpenMenuPatientId] = useState<string | null>(null);
+  const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const openedPatient = patients.find(patient => patient.id === openedPatientId) ?? null;
+
+  useEffect(() => {
+    if (!openMenuPatientId) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!actionMenuRef.current?.contains(event.target as Node)) setOpenMenuPatientId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMenuPatientId(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openMenuPatientId]);
 
   const viewDay = WEEK_DAYS_FULL[new Date(selectedDate + "T12:00:00").getDay()];
   const isToday = selectedDate === todayDate;
@@ -2693,7 +2720,7 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
       </div>
 
       {/* Today's Dialysis Patients */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-visible">
         <div className="px-6 py-4 border-b border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -2744,41 +2771,86 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
               return (
                 <div key={patient.id} className="px-6 py-4 hover:bg-slate-50/60 transition-colors">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
-                        status === "Running"   ? "bg-blue-100" :
-                        status === "Waiting"   ? "bg-amber-100" :
-                        status === "Completed" ? "bg-emerald-100" :
-                        "bg-slate-100"
-                      }`}>
-                        <HeartPulse className={`w-4 h-4 ${
-                          status === "Running"   ? "text-blue-600" :
-                          status === "Waiting"   ? "text-amber-600" :
-                          status === "Completed" ? "text-emerald-600" :
-                          "text-slate-400"
-                        }`} />
+                    <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                          status === "Running"   ? "bg-blue-100" :
+                          status === "Waiting"   ? "bg-amber-100" :
+                          status === "Completed" ? "bg-emerald-100" :
+                          "bg-slate-100"
+                        }`}>
+                          <HeartPulse className={`w-4 h-4 ${
+                            status === "Running"   ? "text-blue-600" :
+                            status === "Waiting"   ? "text-amber-600" :
+                            status === "Completed" ? "text-emerald-600" :
+                            "text-slate-400"
+                          }`} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-slate-800 text-left">{patient.name}</p>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                              session ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"
+                            }`}>{session ? "Assigned" : "Unassigned"}</span>
+                            <span className="text-xs text-slate-400">{patient.uhid}</span>
+                            {session?.slotType === "emergency" && (
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded-full text-[9px] font-bold">Emergency</span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-500 mt-0.5">
+                            <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{slotLabel}</span>
+                            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" />{machineName}</span>
+                            <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{unitName}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            onClick={() => setOpenedPatientId(patient.id)}
-                            className="font-bold text-slate-800 hover:text-violet-700 hover:underline text-left"
-                          >
-                            {patient.name}
-                          </button>
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
-                            session ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"
-                          }`}>{session ? "Assigned" : "Unassigned"}</span>
-                          <span className="text-xs text-slate-400">{patient.uhid}</span>
-                          {session?.slotType === "emergency" && (
-                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded-full text-[9px] font-bold">Emergency</span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-500 mt-0.5">
-                          <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{slotLabel}</span>
-                          <span className="flex items-center gap-1"><Cpu className="w-3 h-3" />{machineName}</span>
-                          <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{unitName}</span>
-                        </div>
+                      <div className="relative shrink-0" ref={openMenuPatientId === patient.id ? actionMenuRef : undefined}>
+                        <button
+                          type="button"
+                          aria-label={`Appointment actions for ${patient.name}`}
+                          aria-haspopup="menu"
+                          aria-expanded={openMenuPatientId === patient.id}
+                          onClick={event => {
+                            event.stopPropagation();
+                            setOpenMenuPatientId(current => current === patient.id ? null : patient.id);
+                          }}
+                          className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-violet-50 hover:text-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-300"
+                        >
+                          <MoreVertical className="h-5 w-5" aria-hidden="true" />
+                        </button>
+                        {openMenuPatientId === patient.id && (() => {
+                          const canManageAppointment = Boolean(session &&
+                            session.date === todayDate &&
+                            ["Scheduled", "Waiting", "Called"].includes(session.status));
+                          return (
+                            <div role="menu" aria-label={`Appointment actions for ${patient.name}`}
+                              className="absolute right-0 top-full z-40 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                              <button type="button" role="menuitem" disabled={!canManageAppointment}
+                                onClick={() => {
+                                  setOpenMenuPatientId(null);
+                                  setOpenedPatientMode("reschedule");
+                                  setOpenedPatientId(patient.id);
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white">
+                                Edit Dialysis Slot
+                              </button>
+                              <button type="button" role="menuitem" disabled={!canManageAppointment}
+                                onClick={() => {
+                                  setOpenMenuPatientId(null);
+                                  setOpenedPatientMode("cancel");
+                                  setOpenedPatientId(patient.id);
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white">
+                                Cancel Dialysis Slot
+                              </button>
+                              {!canManageAppointment && (
+                                <p className="px-3 pb-1 pt-1 text-[11px] text-slate-500">
+                                  Actions are available for scheduled appointments today.
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -2809,13 +2881,14 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
           sessions={sessions}
           selectedDate={selectedDate}
           todayDate={todayDate}
+          initialMode={openedPatientMode}
           onAssign={todayOnly => {
             setOpenedPatientId(null);
             if (todayOnly) onAssignToday(openedPatient.id);
             else onNavigate("assign-patient", "Assign Patient", { patientId: openedPatient.id, date: selectedDate });
           }}
           onUpdate={onUpdateSession}
-          onClose={() => setOpenedPatientId(null)}
+          onClose={() => { setOpenedPatientId(null); setOpenedPatientMode("details"); }}
         />
       )}
 

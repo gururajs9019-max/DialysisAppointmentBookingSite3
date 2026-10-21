@@ -119,12 +119,20 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
     const dashboardPatientRow = () => page.locator("div.divide-y.divide-slate-50 > div.px-6.py-4")
       .filter({ hasText: patient.uhid });
-    await page.getByRole("button", { name: patient.name, exact: true }).click();
-    const patientDetails = page.getByRole("dialog");
-    await patientDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
-    assert.equal(await patientDetails.getByText(patient.uhid, { exact: true }).isVisible(), true, "patient UHID must appear in appointment details");
-    assert.equal(await patientDetails.getByText("Unassigned", { exact: true }).isVisible(), true, "an unassigned patient must be identified clearly");
-    await patientDetails.getByRole("button", { name: "Assign Today", exact: true }).click();
+    const unassignedPatientRow = dashboardPatientRow();
+    assert.equal(await unassignedPatientRow.getByRole("button", { name: patient.name, exact: true }).count(), 0,
+      "clicking a patient name must not open the appointment actions");
+    await unassignedPatientRow.getByText(patient.name, { exact: true }).click();
+    assert.equal(await page.getByRole("dialog").count(), 0, "patient name must remain non-interactive");
+    const unassignedActions = unassignedPatientRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
+    await unassignedActions.click();
+    const unassignedMenu = unassignedPatientRow.getByRole("menu");
+    await unassignedMenu.waitFor();
+    assert.equal(await unassignedMenu.getByRole("menuitem", { name: "Edit Dialysis Slot" }).isDisabled(), true,
+      "editing an unassigned patient must not be offered");
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).click();
+    assert.equal(await unassignedPatientRow.getByRole("menu").count(), 0, "clicking outside the menu closes it");
+    await unassignedPatientRow.getByRole("button", { name: "Assign", exact: true }).click();
     await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
     assert.equal(await page.getByText(patient.name, { exact: true }).isVisible(), true, "selected patient name must be shown at unit selection");
     const unitOne = page.getByRole("button").filter({ hasText: "Unit 1" }).last();
@@ -230,12 +238,14 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     assert.equal(await refreshedDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
       "the assignment remains visible and cannot be assigned again after a full page reload");
 
-    await page.getByRole("button", { name: patient.name, exact: true }).click();
+    const editActions = refreshedDailyPatientRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
+    await editActions.click();
+    const editMenu = refreshedDailyPatientRow.getByRole("menu");
+    await editMenu.getByRole("menuitem", { name: "Edit Dialysis Slot" }).click();
     const assignedDetails = page.getByRole("dialog");
-    await assignedDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
-    await assignedDetails.getByText(machine.name, { exact: true }).waitFor();
-    await assignedDetails.getByRole("button", { name: "Reschedule Appointment", exact: true }).click();
-    await page.getByRole("heading", { name: "Reschedule Appointment" }).waitFor();
+    await assignedDetails.getByRole("heading", { name: "Reschedule Appointment" }).waitFor();
+    assert.equal(await page.getByLabel("Reschedule machine").inputValue(), machine.id,
+      "editing must load the patient's currently assigned machine");
     await page.getByLabel("Reschedule unit").selectOption({ label: "Unit 2" });
     await page.getByLabel("Reschedule machine").selectOption({ label: `${alternateMachine.code} · Negative` });
     await page.getByLabel("Reschedule time slot").selectOption("Slot 2");
@@ -292,9 +302,23 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await persistedRescheduleRow.getByText(alternateMachine.name, { exact: true }).waitFor();
     await persistedRescheduleRow.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
 
-    await page.getByRole("button", { name: patient.name, exact: true }).click();
-    const cancelDetails = page.getByRole("dialog");
-    await cancelDetails.getByRole("button", { name: "Cancel Appointment", exact: true }).click();
+    const cancellationMenu = persistedRescheduleRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
+    await cancellationMenu.click();
+    await persistedRescheduleRow.getByRole("menu").getByRole("menuitem", { name: "Cancel Dialysis Slot" }).click();
+    await page.getByRole("heading", { name: "Cancel Appointment" }).waitFor();
+    await page.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
+    let appointmentPatchCount = 0;
+    const countAppointmentPatch = request => {
+      if (request.method() === "PATCH" && new URL(request.url()).pathname === `/api/sessions/${assignedSessionId}`) {
+        appointmentPatchCount += 1;
+      }
+    };
+    page.on("request", countAppointmentPatch);
+    await page.getByRole("button", { name: "Keep Slot", exact: true }).click();
+    assert.equal(await page.getByRole("dialog").count(), 0, "Keep Slot closes confirmation without changing the appointment");
+    assert.equal(appointmentPatchCount, 0, "Keep Slot must not send a cancellation update");
+    await dashboardPatientRow().getByRole("button", { name: `Appointment actions for ${patient.name}` }).click();
+    await dashboardPatientRow().getByRole("menu").getByRole("menuitem", { name: "Cancel Dialysis Slot" }).click();
     await page.getByRole("heading", { name: "Cancel Appointment" }).waitFor();
     const cancellationResponsePromise = page.waitForResponse(response =>
       new URL(response.url()).pathname === `/api/sessions/${assignedSessionId}` && response.request().method() === "PATCH");
@@ -302,6 +326,8 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     const cancellationResponse = await cancellationResponsePromise;
     const cancellationResult = await cancellationResponse.json();
     assert.equal(cancellationResponse.status(), 200, cancellationResult.error || "dashboard cancellation must save successfully");
+    assert.equal(appointmentPatchCount, 1, "confirming cancellation sends exactly one update");
+    page.off("request", countAppointmentPatch);
     assert.equal(cancellationResult.session.id, assignedSessionId, "cancellation must retain the appointment record");
     assert.equal(cancellationResult.session.status, "cancelled", "cancellation must be persisted");
     const cancelledDailyPatientRow = dashboardPatientRow();
@@ -323,8 +349,7 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
       contentType: "application/json",
       body: JSON.stringify({ error: "Patient was not found." }),
     }));
-    await page.getByRole("button", { name: patient.name, exact: true }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Assign Today", exact: true }).click();
+    await dashboardPatientRow().getByRole("button", { name: "Assign", exact: true }).click();
     await page.getByText(/Patient was not found\./).waitFor();
     assert.equal(await page.getByRole("heading", { name: "Select Patient" }).isVisible(), true, "missing patient must return to visible patient selection");
     assert.equal(await page.getByText(/Search for a patient below to choose one manually\./).isVisible(), true, "missing patient must show recovery guidance");

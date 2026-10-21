@@ -1,0 +1,115 @@
+# Replit Prompt — Add Three-Dot Menu to Today's Dialysis Patient Cards
+
+Modify the existing **Today's Dialysis** section in the current Dialysis Slot Manager application.
+
+## 1. Replace Patient-Name Click Actions with a Three-Dot Menu
+
+Currently, when the administrator clicks a patient's name or patient card in the **Today's Dialysis** section, the system displays options to edit or cancel that patient's dialysis slot.
+
+Change this interaction as follows:
+
+- Add a **three-dot vertical menu icon (⋮)** to every patient card in the Today's Dialysis section.
+- Position the icon at the **top-right corner of each patient card**.
+- Keep the patient's name and other patient information visible and readable.
+- Clicking the patient's name should no longer open the edit/cancel slot options.
+- Clicking the three-dot icon should open a small dropdown menu anchored to that specific patient card.
+
+## 2. Three-Dot Menu Options
+
+When the administrator clicks the three-dot icon, display these options:
+
+1. **Edit Dialysis Slot**
+2. **Cancel Dialysis Slot**
+
+Use the existing edit and cancellation functionality. Do not build duplicate functionality.
+
+### Edit Dialysis Slot
+
+When the administrator selects **Edit Dialysis Slot**:
+
+- Open the existing edit-slot form or modal.
+- Load the correct patient's details and currently assigned dialysis slot.
+- Allow the administrator to modify the existing editable fields, such as the date, time slot, unit, or machine, wherever supported by the current application.
+- Save the changes using the existing backend/database logic.
+- Refresh the Today's Dialysis section to reflect the updated information.
+- Do not create a new dialysis booking when editing an existing slot.
+
+### Cancel Dialysis Slot
+
+When the administrator selects **Cancel Dialysis Slot**:
+
+- Display a confirmation dialog before cancelling.
+- Show the patient's name and the dialysis slot details in the confirmation.
+- Provide **Keep Slot** and **Confirm Cancellation** buttons.
+- If the administrator chooses Keep Slot, close the dialog without making changes.
+- If the administrator confirms cancellation, use the existing cancellation logic.
+- Update the Today's Dialysis section immediately after successful cancellation.
+- Ensure the cancellation does not delete the patient's medical history or permanently delete the patient record.
+
+## 3. Menu Interaction and Design
+
+- Use a vertical three-dot icon (⋮), preferably a kebab/menu icon from the project's existing icon library.
+- Open the menu when the icon is clicked.
+- Clicking outside the menu should close it.
+- Clicking the icon again should toggle the menu closed.
+- Close the menu after an action is selected.
+- Ensure the menu is not clipped by the patient card or hidden behind other elements.
+- Keep the menu usable on desktop, tablet, and mobile screens.
+- Use the existing application's colors, typography, borders, shadows, and spacing.
+- Add a subtle hover effect to the menu icon.
+- Provide accessible labels and keyboard interaction where supported.
+
+## 4. Important Event Handling
+
+The three-dot menu must work independently for every patient card.
+
+- Clicking one patient's three-dot icon must show the menu for that patient only.
+- The correct patient ID and dialysis session/slot ID must be passed to the selected action.
+- Clicking the three-dot icon must not trigger the patient card's existing click handler.
+- If the card currently has an `onClick` handler, prevent event propagation from the menu button.
+- Do not allow clicks on the patient's name or other card content to open the old edit/cancel interface.
+- Preserve any unrelated card interactions that are still required by the application.
+
+## 5. Backend and Data Safety
+
+Before making changes, inspect the existing codebase and reuse the current patient-card component, edit-slot modal, cancellation dialog, and backend functions.
+
+- Do not hardcode patient data.
+- Do not create duplicate database tables or API endpoints unnecessarily.
+- Do not modify dialysis scheduling rules.
+- Do not change unit, machine, or time-slot assignment logic.
+- Prevent accidental duplicate cancellations or submissions.
+- Show an error message if editing or cancellation fails.
+- Refresh the displayed data only after the backend confirms a successful operation.
+
+## 6. Strict Scope Restrictions
+
+Make only the requested UI interaction change in the **Today's Dialysis** section.
+
+Do not modify:
+- Patient Portal
+- Doctor Portal
+- Other Administrator Portal pages
+- Patient registration
+- Patient medical information
+- Machine management
+- Unit management
+- Existing dialysis scheduling functionality
+- Authentication or user permissions
+
+## 7. Acceptance Tests
+
+After implementing the change, verify:
+
+1. Every patient card has a three-dot icon in its top-right corner.
+2. Clicking a patient's name no longer opens the edit/cancel options.
+3. Clicking the three-dot icon opens the menu for the correct patient.
+4. Edit Dialysis Slot opens the existing edit form with the correct details.
+5. Saving an edit updates the existing slot rather than creating a duplicate.
+6. Cancel Dialysis Slot asks for confirmation before proceeding.
+7. Cancelling a slot does not delete the patient or their medical history.
+8. Clicking outside the menu closes it.
+9. Menus on different patient cards operate independently.
+10. All other portals and existing features continue to work unchanged.
+
+**Implement the changes directly in the existing project. Do not rebuild the application or replace working functionality.**
