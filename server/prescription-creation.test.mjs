@@ -102,11 +102,12 @@ try {
   }
   await page.goto(base);
   await signIn();
-  await expect(page.getByRole("combobox", { name: "Prescribing staff" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Prescription date" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Prescribing staff" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
   await page.getByText("Medical prescription", { exact: true }).click();
   const form = page.locator('section[aria-labelledby="create-prescription-title"]');
+  await expect(form.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
   const save = form.getByRole("button", { name: "Save Prescription", exact: true });
   await save.click();
   await expect(form.getByRole("alert")).toContainText("Select a registered active patient");
@@ -173,20 +174,50 @@ try {
   assert.equal(uiRows.length, 1, "the lost successful response does not create a duplicate");
   assert.equal(uiRows[0].id, committedId);
   assert.equal(uiRows[0].data.medications.length, 2);
-  await expect(page.getByText("Synthetic UI instructions", { exact: false })).toBeVisible();
+  assert.match(uiRows[0].data.prescriptionDate, /^\d{4}-\d{2}-\d{2}$/, "the hidden date is still stored for the medical-order API");
+  assert.equal(uiRows[0].data.medications[0].quantity, "3");
+  assert.equal(uiRows[0].data.medications[0].instructions, "Synthetic UI instructions");
+  await expect(page.getByText("Synthetic UI instructions", { exact: false })).toHaveCount(0);
   await page.reload();
   await signIn();
   await page.getByPlaceholder("Search by patient name or UHID…").fill(uiPatient.uhid);
-  const persistedSymptoms = page.getByText("Synthetic UI symptoms", { exact: true });
-  if (!(await persistedSymptoms.isVisible())) {
-    await page.getByRole("button").filter({ has: page.getByText(uiPatient.name, { exact: true }) }).first().click();
+  const persistedMedicine = page.getByText("Synthetic UI medicine A", { exact: false });
+  if (!(await persistedMedicine.isVisible())) {
+    await page.getByRole("button").filter({ hasText: uiRows[0].id }).first().click();
   }
-  await expect(persistedSymptoms).toBeVisible();
+  await expect(persistedMedicine).toBeVisible();
+  for (const hiddenValue of [
+    `${run} UI diagnosis`, "Synthetic UI symptoms", "Synthetic UI findings", "Synthetic UI advice",
+    "Synthetic UI diet", "2026-11-19", uiRows[0].data.prescriptionDate,
+    "Prescribed by", "Quantity:", "Instructions:", "Synthetic UI instructions",
+  ]) {
+    await expect(page.getByText(hiddenValue, { exact: false })).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "Edit Prescription", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Quantity", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Instructions", exact: true })).toHaveCount(0);
+  const doctorSave = page.getByRole("button", { name: "Save Changes", exact: true });
+  const doctorNotes = page.getByLabel("Clinical Notes", { exact: true });
+  await doctorSave.scrollIntoViewIfNeeded();
+  const doctorSaveTop = await doctorSave.evaluate(element => element.getBoundingClientRect().top);
+  const doctorNotesTop = await doctorNotes.evaluate(element => element.getBoundingClientRect().top);
+  assert.ok(doctorSaveTop > doctorNotesTop, "Doctor Save Changes appears after the prescription fields");
+  await doctorNotes.fill("Synthetic UI notes after Doctor edit");
+  await doctorSave.click();
+  await expect(page.getByText("Prescription changes saved successfully.", { exact: true })).toBeVisible();
+  const doctorRevisedMedical = (await db.query("SELECT * FROM prescriptions WHERE id=$1", [uiRows[0].id])).rows[0];
+  assert.equal(doctorRevisedMedical.data.notes, "Synthetic UI notes after Doctor edit");
+  assert.equal(doctorRevisedMedical.data.prescriptionDate, uiRows[0].data.prescriptionDate);
+  assert.equal(doctorRevisedMedical.data.medications[0].quantity, "3", "hidden quantity is preserved when a Doctor edits");
+  assert.equal(doctorRevisedMedical.data.medications[0].instructions, "Synthetic UI instructions", "hidden instructions are preserved when a Doctor edits");
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
   await page.getByText("Medical prescription", { exact: true }).click();
   await selectUiPatient();
   await expect(form.getByRole("heading", { name: `Previous prescriptions for ${uiPatient.name}` })).toBeVisible();
-  await expect(form).toContainText("Prescribed by");
+  await expect(form.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  await expect(form.getByText("Prescribed by", { exact: false })).toHaveCount(0);
+  await expect(form.getByText(`${run} UI diagnosis`, { exact: true })).toHaveCount(0);
   await expect(form).toContainText("Synthetic UI medicine A");
   await page.setViewportSize({ width: 900, height: 1100 });
   assert.equal(await form.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth), true, "form fits the tablet viewport");
@@ -201,13 +232,16 @@ try {
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
   await page.getByText("Dialysis prescription", { exact: true }).click();
   const dialysisForm = page.locator('section[aria-labelledby="create-dialysis-prescription-title"]');
+  await expect(dialysisForm.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
   await dialysisForm.getByLabel("Search active patients by name or patient ID").fill(uiPatient.uhid);
   await dialysisForm.getByRole("button").filter({ has: page.getByText(uiPatient.name, { exact: true }) }).click();
-  await dialysisForm.getByLabel("Sessions per week").selectOption("3 Sessions / Week");
-  await dialysisForm.getByLabel("Time slot").selectOption("8:00 AM – 12:00 PM");
-  await dialysisForm.getByLabel("Session duration").selectOption("4 Hours");
+  const doctorWeeklyCount = dialysisForm.getByLabel("Weekly Dialysis Sessions", { exact: true });
+  await expect(doctorWeeklyCount).toHaveValue("0");
   await dialysisForm.getByRole("button", { name: "Monday", exact: true }).click();
   await dialysisForm.getByRole("button", { name: "Wednesday", exact: true }).click();
+  await expect(doctorWeeklyCount).toHaveValue("2");
+  await dialysisForm.getByLabel("Time slot").selectOption("8:00 AM – 12:00 PM");
+  await dialysisForm.getByLabel("Session duration").selectOption("4 Hours");
   await dialysisForm.getByLabel("Blood flow rate").fill("300 mL/min");
   await dialysisForm.getByLabel("Additional instructions").fill("Synthetic dialysis instructions");
   await dialysisForm.getByRole("button", { name: "Create Dialysis Prescription", exact: true }).click();
@@ -217,6 +251,7 @@ try {
   const dialysisRecord = uiRows.find(row => row.data.medicationOrders === false);
   assert.ok(dialysisRecord, "dialysis prescription is distinct from medical medicine orders");
   assert.deepEqual(dialysisRecord.data.dialysisRx.dialysisDays, ["Monday", "Wednesday"]);
+  assert.equal(dialysisRecord.data.dialysisRx.weeklySessionsCount, "2");
   assert.equal(dialysisRecord.data.dialysisRx.bloodFlow, "300 mL/min");
   assert.equal(dialysisRecord.data.notes, "Synthetic dialysis instructions");
   assert.deepEqual(dialysisRecord.data.medications, []);
@@ -372,7 +407,7 @@ try {
   await expect(adminDialysisCard.getByText("Thursday", { exact: true })).toBeVisible();
   assert.deepEqual(adminErrors, [], "administrator prescription management has no browser runtime errors");
   assert.deepEqual(errors, [], "prescription creation has no browser runtime errors");
-  console.log("prescription tests passed: Doctor portal unchanged, Admin-only privacy/layout, preserved medication data, days-derived dialysis counts on create/edit/reopen, and no appointment side effects");
+  console.log("prescription tests passed: shared staff-page privacy/layout, preserved medication data, days-derived dialysis counts, no appointment side effects, and working edits in both portals");
 } finally {
   if (browser) await browser.close();
   const prescriptionIds = patientIds.length

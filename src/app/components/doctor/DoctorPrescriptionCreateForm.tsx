@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CalendarDays, FileText, Loader2, Pill, Plus, Search, Trash2, UserRound, X } from "lucide-react";
+import { FileText, Loader2, Pill, Plus, Search, Trash2, UserRound, X } from "lucide-react";
 import type { AdminPrescription, Patient } from "../../AdminApp";
 import { createDoctorPrescription, type DoctorPrescriptionCreatePayload, type PrescriptionMedicationDetails } from "../../lib/staffApi";
 import { useStaffDraftGuard } from "../../lib/useStaffDraftGuard";
@@ -34,15 +34,6 @@ function emptyMedication(): PrescriptionMedicationDetails {
 function chronologyDate(prescription: AdminPrescription) {
   const extended = prescription as DoctorPrescriptionDetails;
   return extended.prescriptionDate || prescription.createdAt || prescription.issuedDate || "";
-}
-
-function displayDate(value: string) {
-  if (!value) return "Date not recorded";
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
-  const date = new Date(dateOnly ? `${value}T00:00:00` : value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 export function DoctorPrescriptionCreateForm({
@@ -231,19 +222,6 @@ export function DoctorPrescriptionCreateForm({
                   <button type="button" onClick={() => { setPatientId(""); setPatientQuery(""); }}
                     className="text-xs font-semibold text-blue-700 hover:text-blue-900">Change patient</button>
                 </div>
-                {audience === "doctor" && (
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="prescription-date" className={labelClass}>Prescription date</label>
-                      <input id="prescription-date" type="date" required value={prescriptionDate}
-                        onChange={event => setPrescriptionDate(event.target.value)} className={inputClass} />
-                    </div>
-                    <div className="flex items-end gap-2 rounded-lg bg-white/70 p-3 text-xs text-slate-600">
-                      <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
-                      The patient details shown here come from the registered patient record.
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </section>
@@ -256,15 +234,10 @@ export function DoctorPrescriptionCreateForm({
                 {patientHistory.map(prescription => (
                   <li key={prescription.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
                     <div className="min-w-0">
-                       <p className="text-sm font-semibold text-slate-800">
-                         {audience === "administrator"
-                           ? `${prescription.medicationOrders === true || prescription.medications.length ? "Medical" : "Dialysis"} prescription`
-                           : (prescription.diagnosis || "Prescription")}
-                         <span className="font-normal text-slate-500"> · {prescription.status}</span>
-                       </p>
-                       {audience === "doctor" && <p className="text-xs text-slate-500">
-                         {displayDate(chronologyDate(prescription))} · Prescribed by {prescription.createdBy || prescription.updatedBy || "Staff"}
-                       </p>}
+                         <p className="text-sm font-semibold text-slate-800">
+                           {`${prescription.medicationOrders === true || prescription.medications.length ? "Medical" : "Dialysis"} prescription`}
+                           <span className="font-normal text-slate-500"> · {prescription.status}</span>
+                         </p>
                       <p className="mt-1 truncate text-xs text-slate-600">
                         {prescription.medications.map(medication => medication.name).filter(Boolean).join(", ") || "No medication summary"}
                       </p>
