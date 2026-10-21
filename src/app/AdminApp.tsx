@@ -12,7 +12,6 @@ import { localDateKey } from "./lib/scheduleDateMapping.mjs";
 import { appointmentsOverlap, blocksReservation, prescriptionSlot, MACHINE_RESERVED_MESSAGE } from "../../shared/scheduling.mjs";
 import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
-import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
 import {
   DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp,
 } from "./lib/prescription-utils";
@@ -33,7 +32,7 @@ import {
 type NavSection =
   | "dashboard" | "live-schedule" | "patient-history" | "machines"
   | "viral-status" | "register-patient" | "notifications" | "assign-patient"
-  | "treatment-status" | "prescriptions" | "search-patients" | "missed-slots" | "doctors" | "analytics";
+  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics";
 
 type DoctorStatus = "Active" | "Inactive";
 
@@ -6309,7 +6308,6 @@ export default function AdminApp({
     { section: "missed-slots",     label: "Missed Slots",      icon: <SkipForward className="w-4 h-4" />,     group: "scheduling" },
     { section: "patient-history",  label: "Patient History",   icon: <ClipboardList className="w-4 h-4" />,   group: "patients" },
     { section: "treatment-status", label: "Treatment Status",  icon: <HeartPulse className="w-4 h-4" />,      group: "patients" },
-    { section: "prescriptions",    label: "Prescriptions",     icon: <Pill className="w-4 h-4" />,           group: "patients" },
     { section: "search-patients",  label: "Search Patients",   icon: <Search className="w-4 h-4" />,          group: "patients" },
     { section: "machines",         label: "Machines",          icon: <Cpu className="w-4 h-4" />,             group: "resources" },
     { section: "viral-status",     label: "Viral Status",      icon: <FlaskConical className="w-4 h-4" />,    group: "resources" },
@@ -6373,17 +6371,6 @@ export default function AdminApp({
         targetPrescriptionId={prescriptionTarget?.prescriptionId}
         onOpenSchedule={()=>navigate("live-schedule","Live Schedule")}
         onSessionStatus={(session,status)=>applySessionUpdate(session.id,{status},{status:({running:"Running",waiting:"Waiting",completed:"Completed"} as const)[status]})} />;
-      case "prescriptions":
-        return <DoctorPrescription
-          onNavigate={() => undefined}
-          patients={patients}
-          prescriptions={prescriptions}
-          setPrescriptions={setPrescriptions}
-          doctorName={currentUser?.name ?? "Administrator"}
-          addRxNotification={() => undefined}
-          onDraftStateChange={onDraftStateChange}
-          isAdmin
-        />;
       case "search-patients":
         return (
           <SearchSection patients={patients} sessions={sessions} onNavigate={navigate}
