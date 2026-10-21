@@ -231,17 +231,19 @@ export function DoctorPrescriptionCreateForm({
                   <button type="button" onClick={() => { setPatientId(""); setPatientQuery(""); }}
                     className="text-xs font-semibold text-blue-700 hover:text-blue-900">Change patient</button>
                 </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="prescription-date" className={labelClass}>Prescription date</label>
-                    <input id="prescription-date" type="date" required value={prescriptionDate}
-                      onChange={event => setPrescriptionDate(event.target.value)} className={inputClass} />
+                {audience === "doctor" && (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="prescription-date" className={labelClass}>Prescription date</label>
+                      <input id="prescription-date" type="date" required value={prescriptionDate}
+                        onChange={event => setPrescriptionDate(event.target.value)} className={inputClass} />
+                    </div>
+                    <div className="flex items-end gap-2 rounded-lg bg-white/70 p-3 text-xs text-slate-600">
+                      <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
+                      The patient details shown here come from the registered patient record.
+                    </div>
                   </div>
-                  <div className="flex items-end gap-2 rounded-lg bg-white/70 p-3 text-xs text-slate-600">
-                    <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
-                    The patient details shown here come from the registered patient record.
-                  </div>
-                </div>
+                )}
               </div>
             )}
           </section>
@@ -254,10 +256,15 @@ export function DoctorPrescriptionCreateForm({
                 {patientHistory.map(prescription => (
                   <li key={prescription.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-800">{prescription.diagnosis || "Prescription"} <span className="font-normal text-slate-500">· {prescription.status}</span></p>
-                      <p className="text-xs text-slate-500">
-                        {displayDate(chronologyDate(prescription))} · Prescribed by {prescription.createdBy || prescription.updatedBy || "Staff"}
-                      </p>
+                       <p className="text-sm font-semibold text-slate-800">
+                         {audience === "administrator"
+                           ? `${prescription.medicationOrders === true || prescription.medications.length ? "Medical" : "Dialysis"} prescription`
+                           : (prescription.diagnosis || "Prescription")}
+                         <span className="font-normal text-slate-500"> · {prescription.status}</span>
+                       </p>
+                       {audience === "doctor" && <p className="text-xs text-slate-500">
+                         {displayDate(chronologyDate(prescription))} · Prescribed by {prescription.createdBy || prescription.updatedBy || "Staff"}
+                       </p>}
                       <p className="mt-1 truncate text-xs text-slate-600">
                         {prescription.medications.map(medication => medication.name).filter(Boolean).join(", ") || "No medication summary"}
                       </p>

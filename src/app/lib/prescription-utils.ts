@@ -26,6 +26,10 @@ export const SLOT_OPTIONS = [
 
 export const DURATION_OPTIONS = ["2 Hours", "3 Hours", "4 Hours", "5 Hours"];
 
+export function weeklySessionsCountFromDays(days: readonly string[]): string {
+  return String(new Set(days).size);
+}
+
 export function formatRxTimestamp(iso: string): string {
   const date = new Date(iso);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

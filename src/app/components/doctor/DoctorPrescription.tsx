@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
 import type { AdminPrescription, Patient, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
 import { updatePrescription, PrescriptionConflictError, type DoctorPrescriptionCreatePayload, type PrescriptionMedicationDetails } from "../../lib/staffApi";
-import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp } from "../../lib/prescription-utils";
+import {
+  WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS,
+  formatRxTimestamp, weeklySessionsCountFromDays,
+} from "../../lib/prescription-utils";
 import { PrescriptionConflict } from "../PrescriptionConflict";
 import { usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
 import { DoctorPrescriptionCreateForm } from "./DoctorPrescriptionCreateForm";
@@ -74,6 +77,7 @@ export function DoctorPrescription({
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
   const [showHistoryFor, setShowHistoryFor] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState("");
   const [conflict, setConflict] = useState(false);
   const [savingRx, setSavingRx] = useState(false);
   const draftGuard = usePrescriptionDraftGuard(editDraft, savingRx, onDraftStateChange);
@@ -111,14 +115,14 @@ export function DoctorPrescription({
 
   function startCreate() {
     if (!draftGuard.confirmDiscard()) return;
-    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null);
+    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null); setSaveSuccess("");
     setCreationSuccess(false); setNewPrescriptionKind(null); setShowNew(true);
   }
 
   function startEdit(rx: AdminPrescription) {
     if (!draftGuard.confirmDiscard()) return;
     draftGuard.beginDraft(rx);
-    setConflict(false); setSaveError(null);
+    setConflict(false); setSaveError(null); setSaveSuccess("");
     setEditDraft(JSON.parse(JSON.stringify(rx)));
     setEditingId(rx.id);
     setShowHistoryFor(null);
@@ -126,7 +130,7 @@ export function DoctorPrescription({
 
   function cancelEdit() {
     if (!draftGuard.confirmDiscard()) return;
-    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null);
+    setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null); setSaveSuccess("");
   }
 
   async function saveEdit() {
@@ -136,7 +140,14 @@ export function DoctorPrescription({
     setSavingRx(true);
     try {
       setSaveError(null);
-      const saved = await updatePrescription(editDraft.id, editDraft);
+      const hasDialysisPrescription = prescriptionKinds(editDraft).dialysis;
+      const draftToSave = isAdmin && hasDialysisPrescription
+        ? { ...editDraft, dialysisRx: {
+          ...editDraft.dialysisRx,
+          weeklySessionsCount: weeklySessionsCountFromDays(editDraft.dialysisRx.dialysisDays),
+        } }
+        : editDraft;
+      const saved = await updatePrescription(editDraft.id, draftToSave);
       setPrescriptions(prev => prev.map(rx => rx.id === saved.id ? saved : rx));
     } catch (error) {
       if (error instanceof PrescriptionConflictError) setConflict(true);
@@ -145,6 +156,7 @@ export function DoctorPrescription({
     } finally { setSavingRx(false); }
     setEditingId(null);
     setEditDraft(null);
+    if (isAdmin) setSaveSuccess("Prescription changes saved successfully.");
   }
 
   function updateRxScalar(key: keyof Omit<RxDialysis, "dialysisDays">, value: string) {
@@ -208,28 +220,35 @@ export function DoctorPrescription({
           <Plus className="w-4 h-4" /> Create Prescription
         </button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className={isAdmin ? "grid max-w-sm gap-3" : "grid gap-3 sm:grid-cols-3"}>
         <label className="text-xs font-semibold text-slate-600">Prescription type
           <select value={typeFilter} onChange={event => setTypeFilter(event.target.value as typeof typeFilter)}
             className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700">
             <option>All</option><option>Medical</option><option>Dialysis</option>
           </select>
         </label>
-        <label className="text-xs font-semibold text-slate-600">Prescribing staff
-          <select value={doctorFilter} onChange={event => setDoctorFilter(event.target.value)}
-            className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700">
-            <option value="All">All staff</option>
-            {doctorOptions.map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        <label className="text-xs font-semibold text-slate-600">Prescription date
-          <input type="date" value={dateFilter} onChange={event => setDateFilter(event.target.value)}
-            className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700" />
-        </label>
+        {!isAdmin && (
+          <>
+            <label className="text-xs font-semibold text-slate-600">Prescribing staff
+              <select value={doctorFilter} onChange={event => setDoctorFilter(event.target.value)}
+                className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700">
+                <option value="All">All staff</option>
+                {doctorOptions.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-slate-600">Prescription date
+              <input type="date" value={dateFilter} onChange={event => setDateFilter(event.target.value)}
+                className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700" />
+            </label>
+          </>
+        )}
       </div>
 
       {creationSuccess && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
         Prescription created successfully.
+      </p>}
+      {saveSuccess && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+        {saveSuccess}
       </p>}
 
       {showNew && !newPrescriptionKind && (
@@ -314,11 +333,13 @@ export function DoctorPrescription({
                           <span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 text-[10px] font-semibold border border-violet-200">Doctor edited</span>
                         )}
                       </div>
-                      <p className="text-xs text-slate-500">
-                         {rx.patientUhid} · {details.prescriptionDate || (rx.createdAt ? formatRxTimestamp(rx.createdAt) : rx.issuedDate)}
-                         {" · "}Prescribed by {rx.createdBy || rx.updatedBy} <span className="text-slate-400">({rx.createdByRole || rx.updatedByRole})</span>
-                      </p>
-                      <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{rx.diagnosis}</p>
+                       <p className="text-xs text-slate-500">
+                          {rx.patientUhid}
+                          {!isAdmin && <> · {details.prescriptionDate || (rx.createdAt ? formatRxTimestamp(rx.createdAt) : rx.issuedDate)}
+                            {" · "}Prescribed by {rx.createdBy || rx.updatedBy} <span className="text-slate-400">({rx.createdByRole || rx.updatedByRole})</span>
+                          </>}
+                       </p>
+                       {!isAdmin && <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{rx.diagnosis}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -337,27 +358,29 @@ export function DoctorPrescription({
                         <h3 className="text-sm font-bold text-blue-700 uppercase tracking-wider flex items-center gap-2">
                           <Edit2 className="w-3.5 h-3.5" /> Editing Prescription
                         </h3>
-                        <div className="flex gap-2">
-                          <button disabled={savingRx} onClick={cancelEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-semibold">
-                            <X className="w-3 h-3" /> Cancel
-                          </button>
-                          <button disabled={savingRx || conflict} onClick={saveEdit} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-semibold disabled:opacity-50">
-                            <Check className="w-3 h-3" /> Save Changes
-                          </button>
-                        </div>
-                         {saveError && <p className="text-xs text-red-600">{saveError}</p>}
+                        {!isAdmin && (
+                          <div className="flex gap-2">
+                            <button disabled={savingRx} onClick={cancelEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-semibold">
+                              <X className="w-3 h-3" /> Cancel
+                            </button>
+                            <button disabled={savingRx || conflict} onClick={saveEdit} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-semibold disabled:opacity-50">
+                              <Check className="w-3 h-3" /> Save Changes
+                            </button>
+                          </div>
+                        )}
+                        {!isAdmin && saveError && <p className="text-xs text-red-600">{saveError}</p>}
                       </div>
 
                       {conflict && <PrescriptionConflict key={draft.id} draft={draft} onResolve={reviewed => {
                         setEditDraft(reviewed); setConflict(false); setSaveError(null);
                       }} />}
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Prescription date
-                          <input type="date" value={draft.prescriptionDate ?? ""}
-                            onChange={event => setEditDraft({ ...draft, prescriptionDate: event.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
-                        </label>
+                        {!isAdmin && <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Prescription date
+                            <input type="date" value={draft.prescriptionDate ?? ""}
+                              onChange={event => setEditDraft({ ...draft, prescriptionDate: event.target.value })}
+                              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                          </label>}
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                           Diagnosis
                           <input value={draft.diagnosis} onChange={event => setEditDraft({ ...draft, diagnosis: event.target.value })}
@@ -401,11 +424,21 @@ export function DoctorPrescription({
                         </h4>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Weekly Dialysis Sessions</label>
-                            <select value={draft.dialysisRx.weeklySessionsCount} onChange={e => updateRxScalar("weeklySessionsCount", e.target.value)}
-                              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
-                              {WEEKLY_SESSION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                            </select>
+                            {isAdmin ? (
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+                                Weekly Dialysis Sessions
+                                <input aria-label="Weekly Dialysis Sessions" readOnly value={weeklySessionsCountFromDays(draft.dialysisRx.dialysisDays)}
+                                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700" />
+                              </label>
+                            ) : (
+                              <>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Weekly Dialysis Sessions</label>
+                                <select value={draft.dialysisRx.weeklySessionsCount} onChange={e => updateRxScalar("weeklySessionsCount", e.target.value)}
+                                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+                                  {WEEKLY_SESSION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                </select>
+                              </>
+                            )}
                           </div>
                           <div>
                             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Dialysis Days</label>
@@ -413,7 +446,7 @@ export function DoctorPrescription({
                               {DIALYSIS_DAY_OPTIONS.map(day => {
                                 const sel = draft.dialysisRx.dialysisDays.includes(day);
                                 return (
-                                  <button key={day} type="button" onClick={() => toggleDay(day)}
+                                  <button key={day} type="button" aria-pressed={sel} onClick={() => toggleDay(day)}
                                     className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${sel ? "bg-blue-600 text-white border-blue-600" : "bg-slate-50 text-slate-600 border-slate-200 hover:border-blue-300"}`}>
                                     {day.slice(0, 3)}
                                   </button>
@@ -468,8 +501,8 @@ export function DoctorPrescription({
                               <th className="text-left px-2 py-2">Route</th>
                               <th className="text-left px-2 py-2">Frequency</th>
                               <th className="text-left px-2 py-2">Duration</th>
-                              <th className="text-left px-2 py-2">Quantity</th>
-                              <th className="text-left px-2 py-2">Instructions</th>
+                              {!isAdmin && <th className="text-left px-2 py-2">Quantity</th>}
+                              {!isAdmin && <th className="text-left px-2 py-2">Instructions</th>}
                               <th className="px-2 py-2 rounded-r-lg"></th>
                             </tr></thead>
                             <tbody>
@@ -499,14 +532,14 @@ export function DoctorPrescription({
                                     <input value={med.duration ?? ""} onChange={e => updateMed(i, "duration", e.target.value)} placeholder="Duration"
                                       className="w-full min-w-24 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
                                   </td>
-                                  <td className="px-1 py-1">
-                                    <input value={med.quantity ?? ""} onChange={e => updateMed(i, "quantity", e.target.value)} placeholder="Quantity"
-                                      className="w-full min-w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
-                                  </td>
-                                  <td className="px-1 py-1">
-                                    <input value={med.instructions ?? ""} onChange={e => updateMed(i, "instructions", e.target.value)} placeholder="Instructions"
-                                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white" />
-                                  </td>
+                                  {!isAdmin && <td className="px-1 py-1">
+                                      <input value={med.quantity ?? ""} onChange={e => updateMed(i, "quantity", e.target.value)} placeholder="Quantity"
+                                        className="w-full min-w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                                    </td>}
+                                  {!isAdmin && <td className="px-1 py-1">
+                                      <input value={med.instructions ?? ""} onChange={e => updateMed(i, "instructions", e.target.value)} placeholder="Instructions"
+                                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white" />
+                                    </td>}
                                   <td className="px-1 py-1">
                                     <button onClick={() => removeMedRow(i)} className="flex justify-center text-red-400 hover:text-red-600 p-1.5">
                                       <Trash2 className="w-3.5 h-3.5" />
@@ -532,6 +565,19 @@ export function DoctorPrescription({
                           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
                         />
                       </div>
+                      {isAdmin && (
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                          {saveError && <p role="alert" className="mr-auto self-center text-sm text-red-700">{saveError}</p>}
+                          <button type="button" disabled={savingRx} onClick={cancelEdit}
+                            className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                            Cancel
+                          </button>
+                          <button type="button" disabled={savingRx || conflict} onClick={saveEdit}
+                            className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60">
+                            {savingRx ? "Saving…" : "Save Changes"}
+                          </button>
+                        </div>
+                      )}
                     </fieldset>
                   ) : (
                     /* ── VIEW MODE ── */
@@ -543,8 +589,14 @@ export function DoctorPrescription({
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                           {RX_SCALAR_FIELDS.map(({ key, label }) => (
                             <div key={key} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">{label}</p>
-                              <p className="text-sm font-semibold text-slate-700">{rx.dialysisRx[key] as string}</p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+                                {isAdmin && key === "weeklySessionsCount" ? "Weekly Dialysis Sessions" : label}
+                              </p>
+                              <p className="text-sm font-semibold text-slate-700">
+                                {isAdmin && key === "weeklySessionsCount"
+                                  ? weeklySessionsCountFromDays(rx.dialysisRx.dialysisDays)
+                                  : rx.dialysisRx[key] as string}
+                              </p>
                             </div>
                           ))}
                           <div className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100 md:col-span-2">
@@ -558,7 +610,7 @@ export function DoctorPrescription({
                         </div>
                       </div>}
 
-                      <div className="my-4 grid gap-3 sm:grid-cols-2">
+                      {!isAdmin && <div className="my-4 grid gap-3 sm:grid-cols-2">
                         {([
                           ["Symptoms / clinical notes", details.symptoms],
                           ["Investigation findings", details.investigationFindings],
@@ -571,7 +623,7 @@ export function DoctorPrescription({
                             <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value}</p>
                           </div>
                         ))}
-                      </div>
+                      </div>}
 
                       <div className="mb-5">
                         <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-2">
@@ -596,8 +648,8 @@ export function DoctorPrescription({
                                     {med.name}
                                     {medication.strength && <span className="block text-xs font-normal text-slate-500">Strength: {medication.strength}</span>}
                                     {medication.duration && <span className="block text-xs font-normal text-slate-500">Duration: {medication.duration}</span>}
-                                    {medication.quantity && <span className="block text-xs font-normal text-slate-500">Quantity: {medication.quantity}</span>}
-                                    {medication.instructions && <span className="block whitespace-pre-wrap text-xs font-normal text-slate-500">Instructions: {medication.instructions}</span>}
+                                    {!isAdmin && medication.quantity && <span className="block text-xs font-normal text-slate-500">Quantity: {medication.quantity}</span>}
+                                    {!isAdmin && medication.instructions && <span className="block whitespace-pre-wrap text-xs font-normal text-slate-500">Instructions: {medication.instructions}</span>}
                                   </td>
                                   <td className="px-3 py-2.5 text-slate-600">{med.dose}</td>
                                   <td className="px-3 py-2.5 text-slate-600">{med.frequency}</td>
@@ -626,7 +678,7 @@ export function DoctorPrescription({
                       )}
 
                       {/* Last Updated metadata */}
-                      <div className="pt-3 border-t border-slate-100 mb-4 space-y-0.5">
+                      {!isAdmin && <div className="pt-3 border-t border-slate-100 mb-4 space-y-0.5">
                         <p className="text-xs text-slate-500">
                           <span className="font-semibold text-slate-600">Last Updated:</span>{" "}
                           {rx.lastUpdatedAt ? formatRxTimestamp(rx.lastUpdatedAt) : rx.issuedDate}
@@ -635,7 +687,7 @@ export function DoctorPrescription({
                           <span className="font-semibold text-slate-600">Updated By:</span>{" "}
                           {rx.updatedBy} <span className="text-slate-400">({rx.updatedByRole})</span>
                         </p>
-                      </div>
+                      </div>}
 
                       {rx.history.length > 0 && (
                         <div className="mb-4">
@@ -658,16 +710,16 @@ export function DoctorPrescription({
                                       h.status === "Revised" ? "bg-amber-100 text-amber-700 border-amber-200" :
                                       "bg-red-100 text-red-700 border-red-200"
                                     }`}>{h.status}</span>
-                                    <span className="text-[10px] text-slate-400">
+                                    {!isAdmin && <span className="text-[10px] text-slate-400">
                                       {h.updatedAt ? formatRxTimestamp(h.updatedAt) : h.updatedDate} · {h.updatedBy}
-                                    </span>
-                                    {h.updatedByRole && (
+                                    </span>}
+                                    {!isAdmin && h.updatedByRole && (
                                       <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${h.updatedByRole === "Doctor" ? "bg-violet-100 text-violet-600" : "bg-blue-100 text-blue-600"}`}>
                                         {h.updatedByRole}
                                       </span>
                                     )}
                                   </div>
-                                  {h.changedFields && h.changedFields.length > 0 && (
+                                  {!isAdmin && h.changedFields && h.changedFields.length > 0 && (
                                     <p className="text-[10px] text-slate-500 mb-2">Changed: {h.changedFields.join(", ")}</p>
                                   )}
                                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-2">

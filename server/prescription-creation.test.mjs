@@ -102,6 +102,8 @@ try {
   }
   await page.goto(base);
   await signIn();
+  await expect(page.getByRole("combobox", { name: "Prescribing staff" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Prescription date" })).toBeVisible();
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
   await page.getByText("Medical prescription", { exact: true }).click();
   const form = page.locator('section[aria-labelledby="create-prescription-title"]');
@@ -222,27 +224,62 @@ try {
   const adminPage = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const adminErrors = [];
   adminPage.on("pageerror", error => adminErrors.push(error.message));
+  async function signInAdmin() {
+    if (!(await adminPage.getByRole("button", { name: "Prescriptions", exact: true }).isVisible().catch(() => false))) {
+      await adminPage.getByRole("button", { name: "Administrator Portal" }).click();
+      if (await adminPage.getByLabel("Username").isVisible().catch(() => false)) {
+        await adminPage.getByLabel("Username").fill("admin1");
+        await adminPage.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+        await adminPage.getByRole("button", { name: "Sign In", exact: true }).click();
+      }
+    }
+    await expect(adminPage.getByRole("button", { name: "Prescriptions", exact: true })).toBeVisible();
+  }
   await adminPage.goto(base);
-  await adminPage.getByRole("button", { name: "Administrator Portal" }).click();
-  await adminPage.getByLabel("Username").fill("admin1");
-  await adminPage.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
-  await adminPage.getByRole("button", { name: "Sign In", exact: true }).click();
+  await signInAdmin();
   await adminPage.getByRole("button", { name: "Prescriptions", exact: true }).click();
   await expect(adminPage.getByRole("heading", { name: "Prescription Management", exact: true })).toBeVisible();
   await adminPage.getByPlaceholder("Search by patient name or UHID…").fill(uiPatient.uhid);
   await adminPage.getByLabel("Prescription type").selectOption("Medical");
-  await adminPage.getByLabel("Prescribing staff").selectOption((await db.query(
-    "SELECT name FROM portal_users WHERE id=$1", [doctorId],
-  )).rows[0].name);
-  await adminPage.getByLabel("Prescription date").fill(uiRows.find(row => row.data.medicationOrders).data.prescriptionDate);
-  const adminMedicalCard = adminPage.getByRole("button").filter({ hasText: uiPatient.uhid }).filter({ hasText: `${run} UI diagnosis` }).first();
-  await adminMedicalCard.click();
-  await expect(adminPage.getByText("Synthetic UI medicine A", { exact: false })).toBeVisible();
+  await expect(adminPage.getByRole("combobox", { name: "Prescribing staff" })).toHaveCount(0);
+  await expect(adminPage.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  const doctorMedicalRecord = uiRows.find(row => row.data.diagnosis === `${run} UI diagnosis`);
+  assert.ok(doctorMedicalRecord, "a medical record should exist for Administrator view checks");
+  const adminMedicalCard = adminPage.getByRole("button").filter({ hasText: uiPatient.uhid }).filter({ hasText: doctorMedicalRecord.id }).first();
+  const visibleMedicineA = adminPage.getByText("Synthetic UI medicine A", { exact: false });
+  if (!(await visibleMedicineA.isVisible())) await adminMedicalCard.click();
+  await expect(visibleMedicineA).toBeVisible();
+  for (const hiddenValue of [
+    `${run} UI diagnosis`, "Synthetic UI symptoms", "Synthetic UI findings", "Synthetic UI advice",
+    "Synthetic UI diet", "2026-11-19", "Prescribed by", "Quantity:", "Instructions:", "Synthetic UI instructions",
+  ]) {
+    await expect(adminPage.getByText(hiddenValue, { exact: false })).toHaveCount(0);
+  }
+  await expect(adminPage.getByText(doctorMedicalRecord.data.prescriptionDate, { exact: true })).toHaveCount(0);
+  await adminPage.getByRole("button", { name: "Edit Prescription", exact: true }).click();
+  await expect(adminPage.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  const editSave = adminPage.getByRole("button", { name: "Save Changes", exact: true });
+  const clinicalNotes = adminPage.getByLabel("Clinical Notes", { exact: true });
+  await editSave.scrollIntoViewIfNeeded();
+  const saveTop = await editSave.evaluate(element => element.getBoundingClientRect().top);
+  const notesTop = await clinicalNotes.evaluate(element => element.getBoundingClientRect().top);
+  assert.ok(saveTop > notesTop, "Administrator Save Changes must appear after the prescription fields");
+  await adminPage.getByLabel("Diagnosis", { exact: true }).fill(`${run} Admin edited diagnosis`);
+  await editSave.click();
+  await expect(adminPage.getByText("Prescription changes saved successfully.", { exact: true })).toBeVisible();
+  const adminRevisedMedical = (await db.query("SELECT * FROM prescriptions WHERE id=$1", [doctorMedicalRecord.id])).rows[0];
+  assert.equal(adminRevisedMedical.data.diagnosis, `${run} Admin edited diagnosis`);
+  assert.equal(adminRevisedMedical.data.prescriptionDate, doctorMedicalRecord.data.prescriptionDate, "the hidden date remains unchanged on edit");
+  assert.equal(adminRevisedMedical.data.medications[0].quantity, "3", "hidden quantity stays stored after edits");
+  assert.equal(adminRevisedMedical.data.medications[0].instructions, "Synthetic UI instructions", "hidden instructions stay stored after edits");
   await adminPage.getByRole("button", { name: "Create Prescription", exact: true }).click();
   await adminPage.getByText("Medical prescription", { exact: true }).click();
   const adminForm = adminPage.locator('section[aria-labelledby="create-prescription-title"]');
+  await expect(adminForm.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
   await adminForm.getByLabel("Search registered patients by name or patient ID").fill(uiPatient.uhid);
   await adminForm.getByRole("button").filter({ has: adminPage.getByText(uiPatient.name, { exact: true }) }).click();
+  await expect(adminForm.getByText("Prescribed by", { exact: false })).toHaveCount(0);
+  await expect(adminForm.getByText(`${run} UI diagnosis`, { exact: true })).toHaveCount(0);
   await adminForm.getByLabel("Diagnosis", { exact: false }).fill(`${run} Administrator prescription`);
   await adminForm.locator("#medicine-0-name").fill("Administrator synthetic medication");
   await adminForm.getByRole("button", { name: "Save Prescription", exact: true }).click();
@@ -252,9 +289,90 @@ try {
   )).rows[0];
   assert.ok(adminCreated, "administrator prescription page creates a real record");
   assert.equal(adminCreated.created_by, adminId, "administrator identity is recorded as the creator");
+  assert.match(adminCreated.data.prescriptionDate, /^\d{4}-\d{2}-\d{2}$/, "the hidden date still satisfies the medical-order API");
+
+  await adminPage.getByRole("button", { name: "Create Prescription", exact: true }).click();
+  await adminPage.getByText("Dialysis prescription", { exact: true }).click();
+  const adminDialysisForm = adminPage.locator('section[aria-labelledby="create-dialysis-prescription-title"]');
+  await expect(adminDialysisForm.getByRole("textbox", { name: "Prescription date" })).toHaveCount(0);
+  await adminDialysisForm.getByLabel("Search active patients by name or patient ID").fill(uiPatient.uhid);
+  await adminDialysisForm.getByRole("button").filter({ has: adminPage.getByText(uiPatient.name, { exact: true }) }).click();
+  await expect(adminDialysisForm.getByText("Prescribed by", { exact: false })).toHaveCount(0);
+  await expect(adminDialysisForm.getByText(`${run} UI diagnosis`, { exact: true })).toHaveCount(0);
+  const weeklyCount = adminDialysisForm.getByLabel("Weekly Dialysis Sessions", { exact: true });
+  await expect(weeklyCount).toHaveValue("0");
+  await adminDialysisForm.getByRole("button", { name: "Monday", exact: true }).click();
+  await adminDialysisForm.getByRole("button", { name: "Thursday", exact: true }).click();
+  await adminDialysisForm.getByRole("button", { name: "Saturday", exact: true }).click();
+  await expect(weeklyCount).toHaveValue("3");
+  await adminDialysisForm.getByRole("button", { name: "Saturday", exact: true }).click();
+  await expect(weeklyCount).toHaveValue("2");
+  await adminDialysisForm.getByRole("button", { name: "Saturday", exact: true }).click();
+  await expect(weeklyCount).toHaveValue("3");
+  await adminDialysisForm.getByLabel("Time slot").selectOption("8:00 AM – 12:00 PM");
+  await adminDialysisForm.getByLabel("Session duration").selectOption("4 Hours");
+  const appointmentsBeforePrescription = (await db.query(
+    "SELECT count(*)::int AS count FROM dialysis_sessions WHERE patient_id=$1", [uiPatient.id],
+  )).rows[0].count;
+  await adminDialysisForm.getByRole("button", { name: "Create Dialysis Prescription", exact: true }).click();
+  await expect(adminPage.getByRole("status")).toContainText("Prescription created successfully.");
+  let adminDialysisRecord = (await db.query(
+    "SELECT * FROM prescriptions WHERE patient_id=$1 AND created_by=$2 AND data->>'medicationOrders'='false' ORDER BY created_at DESC LIMIT 1",
+    [uiPatient.id, adminId],
+  )).rows[0];
+  assert.ok(adminDialysisRecord, "administrator can create a dialysis prescription");
+  assert.equal(adminDialysisRecord.data.dialysisRx.weeklySessionsCount, "3");
+  assert.deepEqual(adminDialysisRecord.data.dialysisRx.dialysisDays, ["Monday", "Thursday", "Saturday"]);
+  assert.equal((await db.query(
+    "SELECT count(*)::int AS count FROM dialysis_sessions WHERE patient_id=$1", [uiPatient.id],
+  )).rows[0].count, appointmentsBeforePrescription, "changing prescription days must not modify appointments");
+
+  await adminPage.getByLabel("Prescription type").selectOption("Dialysis");
+  let adminDialysisHeader = adminPage.getByRole("button").filter({ hasText: adminDialysisRecord.id }).first();
+  let adminDialysisCard = adminDialysisHeader.locator("xpath=..");
+  let weeklyDetails = adminDialysisCard.getByText("Weekly Dialysis Sessions", { exact: true }).locator("xpath=..");
+  if (!(await weeklyDetails.isVisible())) await adminDialysisHeader.click();
+  await expect(weeklyDetails).toContainText("3");
+  await adminDialysisCard.getByRole("button", { name: "Edit Prescription", exact: true }).click();
+  const editWeeklyCount = adminDialysisCard.getByLabel("Weekly Dialysis Sessions", { exact: true });
+  await expect(editWeeklyCount).toHaveValue("3");
+  await expect(adminDialysisCard.getByRole("button", { name: "Sat", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await adminDialysisCard.getByRole("button", { name: "Sat", exact: true }).click();
+  await expect(editWeeklyCount).toHaveValue("2");
+  const dialysisSave = adminDialysisCard.getByRole("button", { name: "Save Changes", exact: true });
+  const dialysisNotes = adminDialysisCard.getByLabel("Clinical Notes", { exact: true });
+  await dialysisSave.scrollIntoViewIfNeeded();
+  const dialysisSaveTop = await dialysisSave.evaluate(element => element.getBoundingClientRect().top);
+  const dialysisNotesTop = await dialysisNotes.evaluate(element => element.getBoundingClientRect().top);
+  assert.ok(dialysisSaveTop > dialysisNotesTop, "dialysis Save Changes must remain at the bottom of the form");
+  await dialysisSave.click();
+  await expect(adminPage.getByText("Prescription changes saved successfully.", { exact: true })).toBeVisible();
+  adminDialysisRecord = (await db.query("SELECT * FROM prescriptions WHERE id=$1", [adminDialysisRecord.id])).rows[0];
+  assert.equal(adminDialysisRecord.data.dialysisRx.weeklySessionsCount, "2");
+  assert.deepEqual(adminDialysisRecord.data.dialysisRx.dialysisDays, ["Monday", "Thursday"]);
+  assert.equal((await db.query(
+    "SELECT count(*)::int AS count FROM dialysis_sessions WHERE patient_id=$1", [uiPatient.id],
+  )).rows[0].count, appointmentsBeforePrescription, "editing prescription days must not modify appointments");
+  assert.equal((await db.query("SELECT count(*)::int AS count FROM prescriptions WHERE patient_id=$1", [uiPatient.id])).rows[0].count, 5,
+    "editing the existing prescription must not create a duplicate");
+  weeklyDetails = adminDialysisCard.getByText("Weekly Dialysis Sessions", { exact: true }).locator("xpath=..");
+  await expect(weeklyDetails).toContainText("2");
+
+  await adminPage.reload();
+  await signInAdmin();
+  await adminPage.getByRole("button", { name: "Prescriptions", exact: true }).click();
+  await adminPage.getByPlaceholder("Search by patient name or UHID…").fill(uiPatient.uhid);
+  await adminPage.getByLabel("Prescription type").selectOption("Dialysis");
+  adminDialysisHeader = adminPage.getByRole("button").filter({ hasText: adminDialysisRecord.id }).first();
+  adminDialysisCard = adminDialysisHeader.locator("xpath=..");
+  weeklyDetails = adminDialysisCard.getByText("Weekly Dialysis Sessions", { exact: true }).locator("xpath=..");
+  if (!(await weeklyDetails.isVisible())) await adminDialysisHeader.click();
+  await expect(weeklyDetails).toContainText("2");
+  await expect(adminDialysisCard.getByText("Monday", { exact: true })).toBeVisible();
+  await expect(adminDialysisCard.getByText("Thursday", { exact: true })).toBeVisible();
   assert.deepEqual(adminErrors, [], "administrator prescription management has no browser runtime errors");
   assert.deepEqual(errors, [], "prescription creation has no browser runtime errors");
-  console.log("prescription creation tests passed: medical and dialysis records, new/existing patients, separate history, authorization, validation, idempotent retries, error preservation, refresh, and tablet UI");
+  console.log("prescription tests passed: Doctor portal unchanged, Admin-only privacy/layout, preserved medication data, days-derived dialysis counts on create/edit/reopen, and no appointment side effects");
 } finally {
   if (browser) await browser.close();
   const prescriptionIds = patientIds.length

@@ -1,0 +1,165 @@
+# Replit Prompt — Refine Prescription Page in Administrator Portal
+
+Modify the existing **Prescription page inside the Administrator Portal** of my Dialysis Slot Manager application.
+
+Before making changes, inspect the existing prescription components, forms, database schema, and save/update logic. Modify the existing implementation instead of rebuilding the page.
+
+**Important:** Keep the changes limited to the requested prescription UI and dialysis prescription behavior. Do not break existing prescription records, patient registration, dialysis scheduling, machine assignments, authentication, or other portals.
+
+## 1. Remove Prescribing Staff and Prescribing Date
+
+In the Administrator Portal → Prescription page:
+
+- Remove the **Prescribing Staff** field.
+- Remove the **Prescribing Date** field.
+
+Remove these fields from the visible prescription form and patient prescription details displayed in this page.
+
+Do not delete existing database columns or historical data if other parts of the application depend on them. Limit this change to the relevant UI unless a backend change is genuinely necessary.
+
+## 2. Remove Unwanted Information When Clicking a Patient
+
+Currently, when I click a patient in the Prescription page, the application displays unnecessary fields and information.
+
+Remove the following fields/sections from the patient prescription details interface in the Administrator Portal:
+
+- Prescription
+- Diagnosis
+- Symptoms
+- Investigation Findings
+- Doctor's Advice
+- Dietary Advice
+- Follow-up Date
+
+These fields should no longer appear in the patient details or prescription view opened by clicking a patient.
+
+Keep the relevant existing patient identification information and the actual medical/dialysis prescription fields required for managing prescriptions.
+
+Do not remove unrelated information from the patient registration page, medical information card, Doctor Portal, or Patient Portal.
+
+Do not delete existing data from the database. This is a UI change, not a request to erase historical clinical information.
+
+## 3. Automatically Calculate Weekly Dialysis Sessions
+
+In the **Dialysis Prescription** form, there is an option to select the days on which the patient should attend dialysis.
+
+For example:
+- Monday
+- Thursday
+- Saturday
+
+When the administrator selects dialysis days, the **Weekly Dialysis Session** field must automatically calculate the total number of selected days.
+
+### Required behavior
+
+Use a multi-select control or selectable checkboxes for the dialysis days.
+
+The weekly session count must be calculated dynamically based on the selected days.
+
+Examples:
+
+| Selected dialysis days | Weekly dialysis sessions |
+|---|---:|
+| Monday | 1 |
+| Monday, Thursday | 2 |
+| Monday, Wednesday, Friday | 3 |
+| Monday, Thursday, Saturday | 3 |
+| Tuesday, Thursday, Saturday | 3 |
+| All seven days | 7 |
+
+### Implementation requirements
+
+- Update Weekly Dialysis Session immediately whenever the selected days change.
+- Do not require the user to click another button to calculate the count.
+- Make Weekly Dialysis Session a read-only or automatically calculated field so users cannot accidentally enter an inconsistent number.
+- If the user deselects a day, recalculate the count immediately.
+- If no days are selected, display 0 or a suitable empty-state value until the user selects a day.
+- Save both the selected days and the calculated weekly session count to the existing data model, using the project's existing conventions.
+- When editing an existing dialysis prescription, restore the saved dialysis days and calculate the correct weekly count.
+- Ensure the count remains correct after saving, refreshing the page, or reopening the prescription.
+
+Use a single source of truth for the selected days and derive the weekly count from that selection. Do not maintain two independently editable values that can become inconsistent.
+
+**Important:** Do not automatically create or modify dialysis appointments just because the selected prescription days change. This feature should update the prescription only unless the existing application explicitly provides a separate scheduling workflow.
+
+## 4. Remove Quantity and Instructions Columns
+
+In the prescription medication table or list, remove these columns:
+
+- Quantity
+- Instructions
+
+Remove the columns from the visible table and the associated row layout in the Administrator Portal Prescription page.
+
+Adjust the remaining columns so the table stays aligned and readable.
+
+Do not delete existing database fields or medication information that other pages or existing records require. Only remove the requested columns from this interface.
+
+Do not accidentally remove unrelated clinical fields from the Dialysis Prescription form.
+
+## 5. Move Save Changes to the End of the Prescription
+
+Currently, the **Save Changes** button appears at the beginning of the prescription.
+
+Move it to the bottom of the prescription form.
+
+### Required layout
+
+The prescription form should follow this order:
+
+1. Patient selection and relevant patient identification.
+2. Prescription type and relevant prescription fields.
+3. Medication or dialysis prescription details.
+4. Dialysis days and automatically calculated Weekly Dialysis Session, when applicable.
+5. Any remaining existing fields that are still required.
+6. **Save Changes** and **Cancel** buttons at the bottom.
+
+### Button behavior
+
+- Save Changes must be positioned after all prescription fields.
+- Cancel should be placed beside Save Changes where appropriate.
+- Save Changes must continue using the existing save/update functionality.
+- Prevent duplicate submissions while a save operation is in progress.
+- Show a success message after a successful save.
+- Show a clear error message if saving fails.
+- Preserve entered values if validation fails.
+- When editing an existing prescription, update the existing record instead of creating a duplicate.
+
+The buttons should remain accessible on long forms, and the page should scroll naturally without jumping unexpectedly.
+
+## 6. Preserve Existing Functionality
+
+Do not modify:
+
+- Patient Portal UI or functionality.
+- Doctor Portal UI or functionality.
+- Patient registration and medical information.
+- Today's Dialysis section.
+- Live Schedule and rescheduling.
+- Automatic Waiting-to-Running status behavior.
+- Machine and unit management.
+- Authentication and role permissions.
+- Existing prescription history and stored patient records.
+
+Continue using the existing backend, database, and authentication system.
+
+Do not introduce hardcoded patient data, duplicate database tables, or a separate prescription storage mechanism.
+
+## 7. Testing Checklist
+
+After implementing the changes, verify:
+
+1. Prescribing Staff is no longer visible on the Administrator Portal Prescription page.
+2. Prescribing Date is no longer visible there.
+3. Clicking a patient no longer displays Prescription, Diagnosis, Symptoms, Investigation Findings, Doctor's Advice, Dietary Advice, or Follow-up Date in the unwanted patient-details interface.
+4. Selecting Monday, Thursday, and Saturday automatically displays 3 weekly sessions.
+5. Selecting two days displays 2 weekly sessions.
+6. Deselecting a day immediately updates the count.
+7. The calculated weekly session count remains correct after saving and reopening the prescription.
+8. Quantity and Instructions columns are no longer visible in the relevant medication table.
+9. Save Changes appears at the bottom of the prescription form.
+10. Saving and editing prescriptions still work correctly.
+11. Existing prescription data remains intact.
+12. Other portals and unrelated functionality remain unchanged.
+
+**Implement the changes directly in the existing Replit project. Inspect the relevant code first, reuse existing components, and report any database or backend changes actually required. Do not rebuild the application or claim the changes are complete without testing them.**

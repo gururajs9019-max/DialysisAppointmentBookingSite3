@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { FileText, Loader2, Search, X } from "lucide-react";
 import type { AdminPrescription, Patient, RxDialysis } from "../../AdminApp";
 import { createDoctorPrescription, type DoctorPrescriptionCreatePayload } from "../../lib/staffApi";
-import { DIALYSIS_DAY_OPTIONS, DURATION_OPTIONS, SLOT_OPTIONS, WEEKLY_SESSION_OPTIONS } from "../../lib/prescription-utils";
+import {
+  DIALYSIS_DAY_OPTIONS, DURATION_OPTIONS, SLOT_OPTIONS, WEEKLY_SESSION_OPTIONS, weeklySessionsCountFromDays,
+} from "../../lib/prescription-utils";
 import { useStaffDraftGuard } from "../../lib/useStaffDraftGuard";
 import type { PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
 
@@ -103,7 +105,10 @@ export function DialysisPrescriptionCreateForm({
       setError("Enter a prescription date.");
       return;
     }
-    if (!dialysisRx.weeklySessionsCount || !dialysisRx.dialysisDays.length || !dialysisRx.slot || !dialysisRx.duration) {
+    const weeklySessionsCount = audience === "administrator"
+      ? weeklySessionsCountFromDays(dialysisRx.dialysisDays)
+      : dialysisRx.weeklySessionsCount;
+    if (!weeklySessionsCount || !dialysisRx.dialysisDays.length || !dialysisRx.slot || !dialysisRx.duration) {
       setError("Enter the weekly schedule, dialysis days, slot, and session duration.");
       return;
     }
@@ -116,7 +121,7 @@ export function DialysisPrescriptionCreateForm({
       symptoms: "",
       investigationFindings: "",
       advice: "",
-      dialysisRx,
+      dialysisRx: { ...dialysisRx, weeklySessionsCount },
       medications: [],
       dietaryAdvice: "",
       followUpDate: "",
@@ -197,7 +202,11 @@ export function DialysisPrescriptionCreateForm({
                   {[...patientHistory].reverse().slice(0, 3).map(prescription => (
                     <button type="button" key={prescription.id} onClick={() => onViewExisting(prescription)}
                       className="flex w-full items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-left text-xs hover:bg-blue-100">
-                      <span className="truncate font-semibold text-slate-700">{prescription.diagnosis || "Prescription"} · {prescription.issuedDate}</span>
+                       <span className="truncate font-semibold text-slate-700">
+                         {audience === "administrator"
+                           ? `${prescription.medicationOrders === true || prescription.medications.length ? "Medical" : "Dialysis"} prescription · ${prescription.status}`
+                           : `${prescription.diagnosis || "Prescription"} · ${prescription.issuedDate}`}
+                       </span>
                       <span className="shrink-0 text-blue-700">View</span>
                     </button>
                   ))}
@@ -209,18 +218,25 @@ export function DialysisPrescriptionCreateForm({
           <section className="space-y-4" aria-labelledby="dialysis-prescription-details">
             <h3 id="dialysis-prescription-details" className="text-sm font-bold uppercase tracking-wide text-slate-700">Prescription details</h3>
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className={labelClass}>Prescription date
-                <input type="date" value={prescriptionDate} onChange={event => setPrescriptionDate(event.target.value)} className={inputClass} required />
-              </label>
+              {audience === "doctor" && <label className={labelClass}>Prescription date
+                  <input type="date" value={prescriptionDate} onChange={event => setPrescriptionDate(event.target.value)} className={inputClass} required />
+                </label>}
               <label className={labelClass}>Diagnosis <span className="font-normal">(optional)</span>
                 <input value={diagnosis} onChange={event => setDiagnosis(event.target.value)} className={inputClass} maxLength={2000} />
               </label>
-              <label className={labelClass}>Sessions per week
-                <select value={dialysisRx.weeklySessionsCount} onChange={event => updateScalar("weeklySessionsCount", event.target.value)} className={inputClass} required>
-                  <option value="">Select frequency</option>
-                  {WEEKLY_SESSION_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
+              {audience === "administrator" ? (
+                <label className={labelClass}>Weekly Dialysis Sessions
+                  <input aria-label="Weekly Dialysis Sessions" readOnly value={weeklySessionsCountFromDays(dialysisRx.dialysisDays)}
+                    className={`${inputClass} bg-slate-50`} />
+                </label>
+              ) : (
+                <label className={labelClass}>Sessions per week
+                  <select value={dialysisRx.weeklySessionsCount} onChange={event => updateScalar("weeklySessionsCount", event.target.value)} className={inputClass} required>
+                    <option value="">Select frequency</option>
+                    {WEEKLY_SESSION_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </label>
+              )}
               <label className={labelClass}>Time slot
                 <select value={dialysisRx.slot} onChange={event => updateScalar("slot", event.target.value)} className={inputClass} required>
                   <option value="">Select slot</option>
