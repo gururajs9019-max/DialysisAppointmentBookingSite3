@@ -12,6 +12,10 @@ import { localDateKey } from "./lib/scheduleDateMapping.mjs";
 import { appointmentsOverlap, blocksReservation, prescriptionSlot, MACHINE_RESERVED_MESSAGE } from "../../shared/scheduling.mjs";
 import { StaffNotificationsPage } from "./components/staff/StaffNotificationsPage";
 import { PrescriptionConflict } from "./components/PrescriptionConflict";
+import { DoctorPrescription } from "./components/doctor/DoctorPrescription";
+import {
+  WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp,
+} from "./lib/prescription-utils";
 import {
   LayoutDashboard, Activity, Cpu, ClipboardList, Bell, Search, LogOut,
   UserCog, Menu, X, CheckCircle, AlertCircle, ChevronRight, Eye, Edit3,
@@ -21,7 +25,7 @@ import {
   Users, ChevronDown, ClipboardCheck, Ban, SkipForward, HeartHandshake,
   MapPin, Phone, TrendingUp, Zap, ScrollText, UserCheck, UserX,
   ChevronUp, BarChart3, Pill, Plus, Filter, Building2, Tag,
-  Trash2, EyeOff, Lock, MoreVertical
+  Trash2, EyeOff, Lock
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -29,7 +33,7 @@ import {
 type NavSection =
   | "dashboard" | "live-schedule" | "patient-history" | "machines"
   | "viral-status" | "register-patient" | "notifications" | "assign-patient"
-  | "treatment-status" | "search-patients" | "missed-slots" | "doctors" | "analytics";
+  | "treatment-status" | "prescriptions" | "search-patients" | "missed-slots" | "doctors" | "analytics";
 
 type DoctorStatus = "Active" | "Inactive";
 
@@ -143,14 +147,6 @@ export interface RxDialysis {
   dryWeight: string; anticoagulation: string;
 }
 
-export const WEEKLY_SESSION_OPTIONS = [
-  "1 Session / Week","2 Sessions / Week","3 Sessions / Week","4 Sessions / Week",
-  "5 Sessions / Week","6 Sessions / Week","7 Sessions / Week",
-];
-export const DIALYSIS_DAY_OPTIONS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-export const SLOT_OPTIONS = ["8:00 AM – 12:00 PM","12:00 PM – 4:00 PM","4:00 PM – 8:00 PM"];
-export const DURATION_OPTIONS = ["2 Hours","3 Hours","4 Hours","5 Hours"];
-
 export const ADMIN_RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis,"dialysisDays">; label: string }[] = [
   { key: "weeklySessionsCount", label: "Weekly Sessions" },
   { key: "slot",                label: "Slot" },
@@ -161,7 +157,16 @@ export const ADMIN_RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis,"dialysisDays"
   { key: "dryWeight",           label: "Dry Weight" },
   { key: "anticoagulation",     label: "Anticoagulation" },
 ];
-export interface RxMedication { name: string; dose: string; frequency: string; route: string; }
+export interface RxMedication {
+  name: string;
+  dose: string;
+  frequency: string;
+  route: string;
+  strength?: string;
+  duration?: string;
+  quantity?: string;
+  instructions?: string;
+}
 export interface PrescriptionHistoryEntry {
   version: number; updatedDate: string; updatedBy: string;
   updatedByRole: "Administrator" | "Doctor";
@@ -181,6 +186,13 @@ export interface AdminPrescription {
   createdAt?: string;
   createdBy?: string;
   createdByRole?: "Administrator" | "Doctor";
+  medicationOrders?: boolean;
+  prescriptionDate?: string;
+  symptoms?: string;
+  investigationFindings?: string;
+  advice?: string;
+  dietaryAdvice?: string;
+  followUpDate?: string;
 }
 export interface RxNotification {
   id: string; doctorName: string; patientName: string; patientUhid: string;
@@ -2266,23 +2278,24 @@ function MachineSection({ machines: initialMachines, patients, sessions, units, 
 
 const WEEK_DAYS_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-function DashboardPatientDetailsDialog({ patient, session, units, machines, sessions, selectedDate, todayDate, initialMode = "details", onAssign, onUpdate, onClose }: {
+function LiveScheduleSessionDialog({ patient, session, units, machines, sessions, todayDate, initialMode = "details", onUpdate, onClose, onRescheduled }: {
   patient: Patient;
   session?: DialysisSession;
   units: DialysisUnit[];
   machines: Machine[];
   sessions: DialysisSession[];
-  selectedDate: string;
   todayDate: string;
   initialMode?: "details" | "reschedule" | "cancel";
-  onAssign: (todayOnly: boolean) => void;
   onUpdate: (id: string, payload: SessionUpdatePayload) => Promise<void>;
   onClose: () => void;
+  onRescheduled: (date: string) => void;
 }) {
   const [mode, setMode] = useState<"details" | "reschedule" | "cancel">(session ? initialMode : "details");
   const [unitId, setUnitId] = useState(session?.unit ?? "");
   const [machineId, setMachineId] = useState(session?.machineId ?? "");
   const [slot, setSlot] = useState(session?.slot || SLOTS[0].label);
+  const originalDate = session?.date === "Today" ? todayDate : (session?.date || todayDate);
+  const [appointmentDate, setAppointmentDate] = useState(originalDate);
   const [emergencyTime, setEmergencyTime] = useState(session?.emergencyTime || session?.startTime || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2311,15 +2324,14 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
     return () => { active = false; };
   }, [patient.id, session?.prescriptionId, prescriptionDefaultRetry]);
   const assigned = Boolean(session);
-  const canManageAppointment = Boolean(session && session.date === todayDate &&
-    ["Scheduled","Waiting","Called"].includes(session.status));
+  const canManageAppointment = Boolean(session && ["Scheduled","Waiting","Called"].includes(session.status));
   const statusMap: Record<SessionStatus, SessionUpdatePayload["status"]> = {
     Scheduled: "scheduled", Waiting: "waiting", Called: "called", Running: "running",
     Completed: "completed", Missed: "missed", Cancelled: "cancelled",
   };
   const selectedSlot = SLOTS.find(item => item.label === slot);
   const rescheduleCandidate = {
-    date: todayDate, slot, slotType: slot === "Emergency" ? "emergency" : "normal",
+    date: appointmentDate, slot, slotType: slot === "Emergency" ? "emergency" : "normal",
     emergencyTime, startTime: emergencyTime, duration: session?.duration || "4 hours",
   };
   const machineReason = (machine: Machine) => {
@@ -2344,12 +2356,12 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
   const selectedMachineReason = selectedMachine ? machineReason(selectedMachine) : "Select a machine";
   const selectedMachineAvailable = selectedMachineReason === "Available";
   const hasRescheduleChanges = Boolean(session && (
-    machineId !== session.machineId || unitId !== session.unit ||
-    slot !== session.slot || (slot === "Emergency" && emergencyTime !== (session.emergencyTime || session.startTime)) || session.date !== todayDate
+    machineId !== session.machineId || unitId !== session.unit || appointmentDate !== originalDate ||
+    slot !== session.slot || (slot === "Emergency" && emergencyTime !== (session.emergencyTime || session.startTime))
   ));
 
   const saveReschedule = async () => {
-    if (savingFlight.current || !session || (slot !== "Emergency" && !selectedSlot) ||
+    if (savingFlight.current || !session || !appointmentDate || appointmentDate < todayDate || (slot !== "Emergency" && !selectedSlot) ||
       (slot === "Emergency" && !emergencyTime) || !canManageAppointment || !selectedMachineAvailable || patientConflict || saving) return;
     savingFlight.current = true;
     setSaving(true); setError(null);
@@ -2358,7 +2370,7 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
         status: statusMap[session.status],
         machineId,
         unitId,
-        date: todayDate,
+        date: appointmentDate,
         slot,
         slotType: slot === "Emergency" ? "emergency" : "normal",
         emergencyTime: slot === "Emergency" ? emergencyTime : "",
@@ -2367,6 +2379,7 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
         duration: slot === "Emergency" ? (session.duration || "4 hours") : "4 hours",
       });
       setSuccessMessage("Appointment rescheduled successfully.");
+      onRescheduled(appointmentDate);
       setMode("details");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The appointment could not be rescheduled. Please try again.");
@@ -2389,12 +2402,12 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation">
-      <section role="dialog" aria-modal="true" aria-labelledby="dashboard-patient-dialog-title"
+      <section role="dialog" aria-modal="true" aria-labelledby="live-schedule-session-dialog-title"
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 rounded-t-3xl bg-gradient-to-r from-violet-700 to-violet-900 px-6 py-5 text-white">
           <div>
-            <h3 id="dashboard-patient-dialog-title" className="text-lg font-bold">
-              {mode === "reschedule" ? "Reschedule Appointment" : mode === "cancel" ? "Cancel Appointment" : "Patient Appointment Details"}
+            <h3 id="live-schedule-session-dialog-title" className="text-lg font-bold">
+              {mode === "reschedule" ? "Reschedule Slot" : mode === "cancel" ? "Cancel Slot" : "Appointment Details"}
             </h3>
             <p className="mt-1 text-sm text-violet-100">{patient.name}</p>
           </div>
@@ -2415,7 +2428,7 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Appointment date</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-800">{session?.date ?? selectedDate}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{session?.date === "Today" ? todayDate : (session?.date ?? todayDate)}</p>
                 </div>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-slate-100 p-3">
@@ -2445,29 +2458,24 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <button type="button" onClick={onClose}
                   className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Close</button>
-                {!assigned && patient.treatmentStatus === "Active" && (
-                  <button type="button" onClick={() => onAssign(selectedDate === todayDate)}
-                    className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
-                    {selectedDate === todayDate ? "Assign Today" : "Assign for Selected Date"}
-                  </button>
-                )}
-                  {canManageAppointment && (
+                {canManageAppointment && (
                   <>
                     <button type="button" onClick={() => { setError(null); setMode("cancel"); }}
-                      className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50">Cancel Appointment</button>
+                      className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50">Cancel Slot</button>
                     <button type="button" onClick={() => {
                       setUnitId(session?.unit ?? "");
                       setMachineId(session?.machineId ?? "");
                       setSlot(session?.slot || SLOTS[0].label);
+                       setAppointmentDate(session?.date === "Today" ? todayDate : (session?.date || todayDate));
                       setEmergencyTime(session?.emergencyTime || session?.startTime || "");
                       setError(null); setSuccessMessage(""); setMode("reschedule");
                     }} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
-                      Reschedule Appointment
+                      Reschedule Slot
                     </button>
                   </>
                 )}
                 {session && !canManageAppointment && (
-                  <p className="self-center text-xs text-slate-500">This session has started, ended, or is not scheduled for today.</p>
+                  <p className="self-center text-xs text-slate-500">Only sessions that have not started can be changed.</p>
                 )}
               </div>
             </>
@@ -2488,8 +2496,9 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
               </div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Appointment date
-                <input aria-label="Reschedule date" type="text" value={todayDate} readOnly
-                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700" />
+                <input aria-label="Reschedule date" type="date" min={todayDate} value={appointmentDate}
+                  onChange={event => setAppointmentDate(event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700" />
               </label>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Dialysis unit
@@ -2532,10 +2541,11 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                     className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" />
                 </label>
               )}
-              {patientConflict && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">This patient already has an appointment in that slot today.</p>}
+              {appointmentDate && appointmentDate < todayDate && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">Choose today or a future date.</p>}
+              {patientConflict && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">This patient already has an appointment in that slot on the selected date.</p>}
               {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button type="button" disabled={saving} onClick={() => { setError(null); setMode("details"); }}
+                <button type="button" disabled={saving} onClick={onClose}
                   className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Back</button>
                 <button type="button" disabled={saving || !selectedMachineAvailable || patientConflict || !hasRescheduleChanges}
                   onClick={saveReschedule} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">
@@ -2551,7 +2561,7 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
                 Are you sure you want to cancel this dialysis appointment for {patient.name}? The appointment record will be retained for history.
               </p>
               <div className="rounded-xl border border-slate-100 p-3 text-sm text-slate-700">
-                <p><span className="font-semibold">Date:</span> {session.date}</p>
+                <p><span className="font-semibold">Date:</span> {session.date === "Today" ? todayDate : session.date}</p>
                 <p><span className="font-semibold">Slot:</span> {session.slotType === "emergency"
                   ? `Emergency · ${session.emergencyTime || session.startTime}`
                   : `${session.slot} · ${session.startTime} – ${session.endTime}`}</p>
@@ -2574,36 +2584,14 @@ function DashboardPatientDetailsDialog({ patient, session, units, machines, sess
   );
 }
 
-function DashboardSection({ patients, machines, sessions, units, onNavigate, onAssignToday, onUpdateSession }: {
+function DashboardSection({ patients, machines, sessions, units, onNavigate, onAssignToday }: {
   patients: Patient[]; machines: Machine[]; sessions: DialysisSession[];
   units: DialysisUnit[];
   onNavigate: (section: NavSection, label: string, opts?: { machine?: Machine; patientId?: string; todayOnly?: boolean; date?: string }) => void;
   onAssignToday: (patientId: string) => void;
-  onUpdateSession: (id: string, payload: SessionUpdatePayload) => Promise<void>;
 }) {
   const todayDate = localDateKey(new Date());
   const [selectedDate, setSelectedDate] = useState(todayDate);
-  const [openedPatientId, setOpenedPatientId] = useState<string | null>(null);
-  const [openedPatientMode, setOpenedPatientMode] = useState<"details" | "reschedule" | "cancel">("details");
-  const [openMenuPatientId, setOpenMenuPatientId] = useState<string | null>(null);
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
-  const openedPatient = patients.find(patient => patient.id === openedPatientId) ?? null;
-
-  useEffect(() => {
-    if (!openMenuPatientId) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!actionMenuRef.current?.contains(event.target as Node)) setOpenMenuPatientId(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenMenuPatientId(null);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [openMenuPatientId]);
 
   const viewDay = WEEK_DAYS_FULL[new Date(selectedDate + "T12:00:00").getDay()];
   const isToday = selectedDate === todayDate;
@@ -2720,7 +2708,7 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
       </div>
 
       {/* Today's Dialysis Patients */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-visible">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -2804,54 +2792,6 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
                           </div>
                         </div>
                       </div>
-                      <div className="relative shrink-0" ref={openMenuPatientId === patient.id ? actionMenuRef : undefined}>
-                        <button
-                          type="button"
-                          aria-label={`Appointment actions for ${patient.name}`}
-                          aria-haspopup="menu"
-                          aria-expanded={openMenuPatientId === patient.id}
-                          onClick={event => {
-                            event.stopPropagation();
-                            setOpenMenuPatientId(current => current === patient.id ? null : patient.id);
-                          }}
-                          className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-violet-50 hover:text-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-300"
-                        >
-                          <MoreVertical className="h-5 w-5" aria-hidden="true" />
-                        </button>
-                        {openMenuPatientId === patient.id && (() => {
-                          const canManageAppointment = Boolean(session &&
-                            session.date === todayDate &&
-                            ["Scheduled", "Waiting", "Called"].includes(session.status));
-                          return (
-                            <div role="menu" aria-label={`Appointment actions for ${patient.name}`}
-                              className="absolute right-0 top-full z-40 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
-                              <button type="button" role="menuitem" disabled={!canManageAppointment}
-                                onClick={() => {
-                                  setOpenMenuPatientId(null);
-                                  setOpenedPatientMode("reschedule");
-                                  setOpenedPatientId(patient.id);
-                                }}
-                                className="w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white">
-                                Edit Dialysis Slot
-                              </button>
-                              <button type="button" role="menuitem" disabled={!canManageAppointment}
-                                onClick={() => {
-                                  setOpenMenuPatientId(null);
-                                  setOpenedPatientMode("cancel");
-                                  setOpenedPatientId(patient.id);
-                                }}
-                                className="w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white">
-                                Cancel Dialysis Slot
-                              </button>
-                              {!canManageAppointment && (
-                                <p className="px-3 pb-1 pt-1 text-[11px] text-slate-500">
-                                  Actions are available for scheduled appointments today.
-                                </p>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {session && <SessionStatusPill status={status} />}
@@ -2872,26 +2812,6 @@ function DashboardSection({ patients, machines, sessions, units, onNavigate, onA
           </div>
         )}
       </div>
-      {openedPatient && (
-        <DashboardPatientDetailsDialog
-          patient={openedPatient}
-          session={todaySessionMap[openedPatient.id]}
-          units={units}
-          machines={machines}
-          sessions={sessions}
-          selectedDate={selectedDate}
-          todayDate={todayDate}
-          initialMode={openedPatientMode}
-          onAssign={todayOnly => {
-            setOpenedPatientId(null);
-            if (todayOnly) onAssignToday(openedPatient.id);
-            else onNavigate("assign-patient", "Assign Patient", { patientId: openedPatient.id, date: selectedDate });
-          }}
-          onUpdate={onUpdateSession}
-          onClose={() => { setOpenedPatientId(null); setOpenedPatientMode("details"); }}
-        />
-      )}
-
       {/* Live schedule table */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
@@ -3289,19 +3209,22 @@ function SearchSection({ patients, sessions, onNavigate, onAssignPatient }: {
 
 // ─── Live Schedule Section ────────────────────────────────────────────────────
 
-function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome }: {
+function LiveScheduleSection({ sessions, patients, machines, units, onUpdateSession, onRecordOutcome }: {
   sessions: DialysisSession[];
+  patients: Patient[];
+  machines: Machine[];
   units: DialysisUnit[];
   onUpdateSession: (id: string, updates: Partial<DialysisSession>) => Promise<void>;
-  onRecordOutcome: (id: string, status: "Missed" | "Cancelled", reason?: string) => Promise<void>;
+  onRecordOutcome: (id: string, status: "Missed", reason?: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [appointmentDialogMode, setAppointmentDialogMode] = useState<"reschedule" | "cancel" | null>(null);
   const [draftVitals, setDraftVitals] = useState({ bp: "", heartRate: "" });
   const [draftComplications, setDraftComplications] = useState<string[]>([]);
   const [draftNote, setDraftNote] = useState("");
   const [missedReasonDraft, setMissedReasonDraft] = useState("");
   const [statusSaving, setStatusSaving] = useState(false);
-  const [savingOutcome, setSavingOutcome] = useState<"Missed" | "Cancelled" | null>(null);
+  const [savingOutcome, setSavingOutcome] = useState<"Missed" | null>(null);
   const [complicOpen, setComplicOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -3320,6 +3243,7 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
   const missed    = dateSessions.filter(s => s.status === "Missed");
   const cancelled = dateSessions.filter(s => s.status === "Cancelled");
   const selected  = dateSessions.find(s => s.id === selectedId) ?? null;
+  const selectedPatient = selected ? patients.find(patient => patient.id === selected.patientId) : undefined;
   const canEdit   = selected !== null;
 
   const openSession = (s: DialysisSession) => {
@@ -3346,11 +3270,11 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
     setDraftComplications(prev => prev.includes(opt) ? prev.filter(x => x !== opt) : [...prev, opt]);
   };
 
-  const handleRecordOutcome = async (status: "Missed" | "Cancelled") => {
+  const handleRecordOutcome = async (status: "Missed") => {
     if (!selectedId || savingOutcome) return;
     setSavingOutcome(status);
     try {
-      await onRecordOutcome(selectedId, status, status === "Missed" ? missedReasonDraft.trim() || undefined : undefined);
+      await onRecordOutcome(selectedId, status, missedReasonDraft.trim() || undefined);
       setMissedReasonDraft("");
       setSessionError(null);
     } catch(e) {
@@ -3486,15 +3410,25 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
               </div>
               <div className="p-6 space-y-6">
                 {["Scheduled", "Waiting", "Called"].includes(selected.status) && (
-                  <button type="button" disabled={statusSaving} onClick={async () => {
-                    try {
-                      setSessionError(null); setStatusSaving(true);
-                      await onUpdateSession(selected.id, { status: selected.status === "Called" ? "Running" : "Called" });
-                    } catch (error) { setSessionError(error instanceof Error ? error.message : "Session status could not be saved."); }
-                    finally { setStatusSaving(false); }
-                  }} className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-semibold">
-                    {selected.status === "Called" ? "Start Treatment" : "Call Patient"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={statusSaving} onClick={async () => {
+                      try {
+                        setSessionError(null); setStatusSaving(true);
+                        await onUpdateSession(selected.id, { status: "Running" });
+                      } catch (error) { setSessionError(error instanceof Error ? error.message : "Session status could not be saved."); }
+                      finally { setStatusSaving(false); }
+                    }} className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-semibold disabled:opacity-50">
+                      {statusSaving ? "Starting…" : "Start Treatment"}
+                    </button>
+                    <button type="button" onClick={() => setAppointmentDialogMode("reschedule")}
+                      className="px-4 py-2 rounded-xl border border-violet-200 bg-white text-violet-700 text-sm font-semibold hover:bg-violet-50">
+                      Reschedule Slot
+                    </button>
+                    <button type="button" onClick={() => setAppointmentDialogMode("cancel")}
+                      className="px-4 py-2 rounded-xl border border-red-200 bg-white text-red-700 text-sm font-semibold hover:bg-red-50">
+                      Cancel Slot
+                    </button>
+                  </div>
                 )}
                 {/* Patient info */}
                 <div>
@@ -3546,11 +3480,6 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
                         onClick={() => void handleRecordOutcome("Missed")}
                         className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50 text-sm font-bold">
                         <AlertCircle className="w-4 h-4" /> {savingOutcome === "Missed" ? "Saving…" : "Mark as Missed"}
-                      </button>
-                      <button type="button" disabled={savingOutcome !== null}
-                        onClick={() => void handleRecordOutcome("Cancelled")}
-                        className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 disabled:opacity-50 text-sm font-bold">
-                        <Ban className="w-4 h-4" /> {savingOutcome === "Cancelled" ? "Saving…" : "Cancel Session"}
                       </button>
                     </div>
                   </div>
@@ -3664,19 +3593,38 @@ function LiveScheduleSection({ sessions, units, onUpdateSession, onRecordOutcome
           )}
         </div>
       </div>
+      {selected && selectedPatient && appointmentDialogMode && (
+        <LiveScheduleSessionDialog
+          key={`${selected.id}:${appointmentDialogMode}`}
+          patient={selectedPatient}
+          session={selected}
+          units={units}
+          machines={machines}
+          sessions={sessions}
+          todayDate={today}
+          initialMode={appointmentDialogMode}
+          onUpdate={async (id, payload) => {
+            const statusMap: Record<NonNullable<SessionUpdatePayload["status"]>, SessionStatus> = {
+              scheduled: "Scheduled", waiting: "Waiting", called: "Called",
+              running: "Running", completed: "Completed", missed: "Missed", cancelled: "Cancelled",
+            };
+            await onUpdateSession(id, {
+              ...payload,
+              ...(payload.status ? { status: statusMap[payload.status] } : {}),
+            });
+          }}
+          onRescheduled={date => {
+            setSelectedDate(date);
+            setSelectedId(selected.id);
+          }}
+          onClose={() => setAppointmentDialogMode(null)}
+        />
+      )}
     </div>
   );
 }
 
 // ─── Treatment Status Section ─────────────────────────────────────────────────
-
-export function formatRxTimestamp(iso: string): string {
-  const d = new Date(iso);
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const h = d.getHours(), m = String(d.getMinutes()).padStart(2, "0");
-  const ampm = h >= 12 ? "PM" : "AM";
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}, ${h % 12 || 12}:${m} ${ampm}`;
-}
 
 export function computeChangedFields(old: AdminPrescription, draft: AdminPrescription): string[] {
   const changed: string[] = [];
@@ -3840,9 +3788,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
       const saved = creatingPatientId
         ? await createPrescription(editDraft.patientId, editDraft)
         : await updatePrescription(editDraft.id, { ...editDraft, updatedBy: adminName, updatedByRole: "Administrator" });
-      setPrescriptions(prev => creatingPatientId
-        ? [...prev.filter(rx => rx.patientId !== saved.patientId), saved]
-        : prev.map(rx => rx.id === saved.id ? saved : rx));
+      setPrescriptions(prev => [saved, ...prev.filter(rx => rx.id !== saved.id)]);
       setEditingRxId(null); setCreatingPatientId(null); setEditDraft(null);
     } catch (error) {
       if (error instanceof PrescriptionConflictError) setConflict(true);
@@ -4101,7 +4047,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                           </div>
                         )}
                       </div>
-                      <textarea value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)} placeholder="Clinical notes (optional)" rows={3} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none mb-4" />
+                      <textarea aria-label="Clinical Notes" value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)} placeholder="Clinical notes (optional)" rows={3} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none mb-4" />
                       <div className="flex gap-3 justify-end">
                         <button onClick={cancelEdit} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-white text-sm font-semibold">Cancel</button>
                         <button disabled={savingRx} onClick={saveEdit} className="flex items-center gap-2 px-5 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 text-sm font-bold"><Check className="w-4 h-4" /> Create Prescription</button>
@@ -4220,7 +4166,7 @@ function TreatmentStatusSection({ patients, prescriptions, setPrescriptions, ses
                       {/* Clinical notes */}
                       <div className="mb-5">
                         <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Clinical Notes</label>
-                        <textarea value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)}
+                        <textarea aria-label="Clinical Notes" value={draft.notes} onChange={e => setEditDraft(d => d ? { ...d, notes: e.target.value } : d)}
                           rows={3} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 bg-white resize-none" />
                       </div>
 
@@ -6253,6 +6199,7 @@ export default function AdminApp({
     { section: "missed-slots",     label: "Missed Slots",      icon: <SkipForward className="w-4 h-4" />,     group: "scheduling" },
     { section: "patient-history",  label: "Patient History",   icon: <ClipboardList className="w-4 h-4" />,   group: "patients" },
     { section: "treatment-status", label: "Treatment Status",  icon: <HeartPulse className="w-4 h-4" />,      group: "patients" },
+    { section: "prescriptions",    label: "Prescriptions",     icon: <Pill className="w-4 h-4" />,           group: "patients" },
     { section: "search-patients",  label: "Search Patients",   icon: <Search className="w-4 h-4" />,          group: "patients" },
     { section: "machines",         label: "Machines",          icon: <Cpu className="w-4 h-4" />,             group: "resources" },
     { section: "viral-status",     label: "Viral Status",      icon: <FlaskConical className="w-4 h-4" />,    group: "resources" },
@@ -6266,8 +6213,7 @@ export default function AdminApp({
     switch (activeSection) {
       case "dashboard":
         return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate}
-          onAssignToday={assignPatientToday}
-          onUpdateSession={(id, payload) => applySessionUpdate(id, payload, {})} />;
+          onAssignToday={assignPatientToday} />;
       case "assign-patient":
         return <AssignPatientSection patients={patients} machines={machines} units={units} sessions={sessions}
           onAssigned={handleAssigned} prefillMachine={prefillMachine} prefillPatientId={prefillPatientId}
@@ -6276,6 +6222,8 @@ export default function AdminApp({
         return (
           <LiveScheduleSection
             sessions={sessions}
+            patients={patients}
+            machines={machines}
             units={units}
             onUpdateSession={async (id, updates) => {
               const currentStatus = updates.status ?? sessions.find(s => s.id === id)?.status ?? "Scheduled";
@@ -6314,6 +6262,17 @@ export default function AdminApp({
         targetPrescriptionId={prescriptionTarget?.prescriptionId}
         onOpenSchedule={()=>navigate("live-schedule","Live Schedule")}
         onSessionStatus={(session,status)=>applySessionUpdate(session.id,{status},{status:({running:"Running",waiting:"Waiting",completed:"Completed"} as const)[status]})} />;
+      case "prescriptions":
+        return <DoctorPrescription
+          onNavigate={() => undefined}
+          patients={patients}
+          prescriptions={prescriptions}
+          setPrescriptions={setPrescriptions}
+          doctorName={currentUser?.name ?? "Administrator"}
+          addRxNotification={() => undefined}
+          onDraftStateChange={onDraftStateChange}
+          isAdmin
+        />;
       case "search-patients":
         return (
           <SearchSection patients={patients} sessions={sessions} onNavigate={navigate}
@@ -6340,8 +6299,7 @@ export default function AdminApp({
         return <AnalyticsSection patients={patients} machines={machines} sessions={sessions} prescriptions={prescriptions} isAdmin />;
       default:
         return <DashboardSection patients={patients} machines={machines} sessions={sessions} units={units} onNavigate={navigate}
-          onAssignToday={assignPatientToday}
-          onUpdateSession={(id, payload) => applySessionUpdate(id, payload, {})} />;
+          onAssignToday={assignPatientToday} />;
     }
   };
 

@@ -37,7 +37,7 @@ export interface PrescriptionMedicationDetails extends RxMedication {
 }
 
 export interface DoctorPrescriptionCreatePayload {
-  medicationOrders: true;
+  medicationOrders: boolean;
   patientId: string;
   prescriptionDate: string;
   diagnosis: string;
@@ -45,6 +45,7 @@ export interface DoctorPrescriptionCreatePayload {
   investigationFindings: string;
   advice: string;
   medications: PrescriptionMedicationDetails[];
+  dialysisRx?: Partial<RxDialysis>;
   dietaryAdvice: string;
   followUpDate: string;
   notes: string;
@@ -359,6 +360,12 @@ export async function updatePrescription(id: string, prescription: AdminPrescrip
     baseVersion: prescription.version,
     diagnosis: prescription.diagnosis, dialysisRx: prescription.dialysisRx, medications: prescription.medications,
     notes: prescription.notes, status: "Revised",
+    prescriptionDate: prescription.prescriptionDate,
+    symptoms: prescription.symptoms,
+    investigationFindings: prescription.investigationFindings,
+    advice: prescription.advice,
+    dietaryAdvice: prescription.dietaryAdvice,
+    followUpDate: prescription.followUpDate,
   }) }, "save");
   const refreshed = await fetchPrescriptions();
   const saved = refreshed.find(item => item.id === id);

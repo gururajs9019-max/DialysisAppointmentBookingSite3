@@ -18,8 +18,8 @@ export async function verifyAvailabilityBrowser({ base, patients, main, spare, m
       await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
     }
     async function assignToday(patient) {
-      await page.getByRole("button", { name: patient.name, exact: true }).click();
-      await page.getByRole("dialog").getByRole("button", { name: "Assign Today", exact: true }).click();
+      const patientRow = page.locator("div.divide-y.divide-slate-50 > div.px-6.py-4").filter({ hasText: patient.uhid });
+      await patientRow.getByRole("button", { name: "Assign", exact: true }).click();
       await page.getByRole("heading", { name: "Select Dialysis Unit", exact: false }).waitFor();
     }
     async function chooseUnit(unit) {
@@ -74,8 +74,12 @@ export async function verifyAvailabilityBrowser({ base, patients, main, spare, m
     assert.equal(result.session.slot, "Slot 1");
     assert.equal(result.session.machineId, otherMachine.id);
     await dashboard(true);
-    await page.getByRole("button", { name: patients[0].name, exact: true }).click();
-    await page.getByRole("button", { name: "Reschedule Appointment", exact: true }).click();
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByLabel("Schedule date", { exact: true }).fill(result.session.date);
+    const assignedCard = page.getByRole("button").filter({ hasText: patients[0].uhid }).first();
+    await assignedCard.click();
+    await page.getByRole("button", { name: "Reschedule Slot", exact: true }).click();
+    await expect(page.getByLabel("Reschedule date")).toHaveValue(result.session.date);
     await expect(page.getByLabel("Reschedule unit")).toHaveValue(otherUnit.id);
     await expect(page.getByLabel("Reschedule machine")).toHaveValue(otherMachine.id);
     await expect(page.getByLabel("Reschedule time slot")).toHaveValue("Slot 1");
@@ -96,9 +100,14 @@ export async function verifyAvailabilityBrowser({ base, patients, main, spare, m
     assert.equal((await rescheduledResponse.json()).session.id, result.session.id);
     await page.getByText("Appointment rescheduled successfully.", { exact: true }).waitFor();
     await dashboard(true);
-    await page.getByRole("button", { name: patients[0].name, exact: true }).click();
-    await page.getByRole("dialog").getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByLabel("Schedule date", { exact: true }).fill(result.session.date);
+    const persistedScheduleCard = page.getByRole("button").filter({ hasText: patients[0].uhid }).first();
+    await persistedScheduleCard.click();
+    await expect(page.getByText("Slot 2", { exact: true })).toBeVisible();
+    await expect(page.getByText("12:00 PM – 4:00 PM", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
     for (const [patient, warning] of [[patients[3], /not one of the supported|unsupported/i], [patients[4], /No prescribed slot/i]]) {
       await assignToday(patient);
       await chooseUnit(firstUnit);

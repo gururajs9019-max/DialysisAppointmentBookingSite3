@@ -124,14 +124,8 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
       "clicking a patient name must not open the appointment actions");
     await unassignedPatientRow.getByText(patient.name, { exact: true }).click();
     assert.equal(await page.getByRole("dialog").count(), 0, "patient name must remain non-interactive");
-    const unassignedActions = unassignedPatientRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
-    await unassignedActions.click();
-    const unassignedMenu = unassignedPatientRow.getByRole("menu");
-    await unassignedMenu.waitFor();
-    assert.equal(await unassignedMenu.getByRole("menuitem", { name: "Edit Dialysis Slot" }).isDisabled(), true,
-      "editing an unassigned patient must not be offered");
-    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).click();
-    assert.equal(await unassignedPatientRow.getByRole("menu").count(), 0, "clicking outside the menu closes it");
+    assert.equal(await unassignedPatientRow.getByRole("button", { name: `Appointment actions for ${patient.name}` }).count(), 0,
+      "the Today’s Dialysis list must not expose an appointment menu");
     await unassignedPatientRow.getByRole("button", { name: "Assign", exact: true }).click();
     await page.getByRole("heading", { name: "Select Dialysis Unit" }).waitFor();
     assert.equal(await page.getByText(patient.name, { exact: true }).isVisible(), true, "selected patient name must be shown at unit selection");
@@ -238,14 +232,26 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     assert.equal(await refreshedDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).count(), 0,
       "the assignment remains visible and cannot be assigned again after a full page reload");
 
-    const editActions = refreshedDailyPatientRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
-    await editActions.click();
-    const editMenu = refreshedDailyPatientRow.getByRole("menu");
-    await editMenu.getByRole("menuitem", { name: "Edit Dialysis Slot" }).click();
+    const nextDateValue = new Date(`${assignmentDate}T12:00:00`);
+    nextDateValue.setDate(nextDateValue.getDate() + 1);
+    const rescheduledDate = `${nextDateValue.getFullYear()}-${String(nextDateValue.getMonth() + 1).padStart(2, "0")}-${String(nextDateValue.getDate()).padStart(2, "0")}`;
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByLabel("Schedule date").fill(assignmentDate);
+    const liveScheduleCard = () => page.getByRole("button").filter({ hasText: patient.uhid }).filter({ hasText: machine.name }).first();
+    await liveScheduleCard().waitFor();
+    await liveScheduleCard().click();
+    assert.equal(await page.getByRole("button", { name: "Call Patient", exact: true }).count(), 0,
+      "the manual status workflow must not show a Call Patient action");
+    assert.equal(await page.getByRole("button", { name: "Start Treatment", exact: true }).isVisible(), true,
+      "staff can explicitly start a scheduled session");
+    await page.getByRole("button", { name: "Reschedule Slot", exact: true }).click();
     const assignedDetails = page.getByRole("dialog");
-    await assignedDetails.getByRole("heading", { name: "Reschedule Appointment" }).waitFor();
+    await assignedDetails.getByRole("heading", { name: "Reschedule Slot" }).waitFor();
     assert.equal(await page.getByLabel("Reschedule machine").inputValue(), machine.id,
-      "editing must load the patient's currently assigned machine");
+      "rescheduling must load the patient's currently assigned machine");
+    assert.equal(await page.getByLabel("Reschedule date").getAttribute("type"), "date",
+      "staff can change the appointment date from Live Schedule");
+    await page.getByLabel("Reschedule date").fill(rescheduledDate);
     await page.getByLabel("Reschedule unit").selectOption({ label: "Unit 2" });
     await page.getByLabel("Reschedule machine").selectOption({ label: `${alternateMachine.code} · Negative` });
     await page.getByLabel("Reschedule time slot").selectOption("Slot 2");
@@ -268,7 +274,7 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     const failedRescheduleResponse = await failedRescheduleResponsePromise;
     assert.equal(failedRescheduleResponse.status(), 409, "reschedule slot conflicts must be surfaced without discarding the draft");
     await page.getByRole("alert").getByText(/Synthetic appointment conflict/).waitFor();
-    assert.equal(await page.getByRole("heading", { name: "Reschedule Appointment" }).isVisible(), true,
+    assert.equal(await page.getByRole("heading", { name: "Reschedule Slot" }).isVisible(), true,
       "a failed reschedule must leave the editing form open");
     assert.equal(await page.getByLabel("Reschedule machine").inputValue(), alternateMachine.id,
       "a failed reschedule must preserve the selected machine");
@@ -281,13 +287,13 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await page.getByRole("button", { name: "Save Reschedule", exact: true }).click();
     const rescheduleResponse = await rescheduleResponsePromise;
     const rescheduleResult = await rescheduleResponse.json();
-    assert.equal(rescheduleResponse.status(), 200, rescheduleResult.error || "dashboard rescheduling must save successfully");
+    assert.equal(rescheduleResponse.status(), 200, rescheduleResult.error || "Live Schedule rescheduling must save successfully");
     assert.equal(rescheduleResult.session.id, assignedSessionId, "rescheduling must update the original session row");
     assert.equal(rescheduleResult.session.machineId, alternateMachine.id, "rescheduled session must use the chosen machine");
-    assert.equal(rescheduleResult.session.date, assignmentDate, "rescheduled appointment date must remain the local calendar date");
+    assert.equal(rescheduleResult.session.date, rescheduledDate, "rescheduling must save the newly selected local date");
     assert.equal(rescheduleResult.session.slot, "Slot 2", "rescheduled appointment must use the chosen time slot");
     await page.unroute(`**/api/sessions/${assignedSessionId}`);
-    await assignedDetails.getByRole("heading", { name: "Patient Appointment Details" }).waitFor();
+    await assignedDetails.getByRole("heading", { name: "Appointment Details" }).waitFor();
     await assignedDetails.getByText(alternateMachine.name, { exact: true }).waitFor();
     await assignedDetails.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
 
@@ -297,16 +303,16 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
     await page.getByRole("button", { name: "Sign In" }).click();
     await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
-    await page.locator('input[type="date"]').fill(assignmentDate);
-    const persistedRescheduleRow = dashboardPatientRow();
-    await persistedRescheduleRow.getByText(alternateMachine.name, { exact: true }).waitFor();
-    await persistedRescheduleRow.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
-
-    const cancellationMenu = persistedRescheduleRow.getByRole("button", { name: `Appointment actions for ${patient.name}` });
-    await cancellationMenu.click();
-    await persistedRescheduleRow.getByRole("menu").getByRole("menuitem", { name: "Cancel Dialysis Slot" }).click();
-    await page.getByRole("heading", { name: "Cancel Appointment" }).waitFor();
-    await page.getByText("Slot 2 · 12:00 PM – 4:00 PM", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Live Schedule", exact: true }).click();
+    await page.getByLabel("Schedule date").fill(rescheduledDate);
+    const persistedRescheduleCard = () => page.getByRole("button").filter({ hasText: patient.uhid }).filter({ hasText: alternateMachine.name }).first();
+    await persistedRescheduleCard().waitFor();
+    await persistedRescheduleCard().click();
+    await page.getByRole("button", { name: "Cancel Slot", exact: true }).click();
+    await page.getByRole("heading", { name: "Cancel Slot", exact: true }).waitFor();
+    const cancellationSlotDetails = page.getByRole("dialog").locator("p").filter({ hasText: "Slot:" });
+    await cancellationSlotDetails.waitFor({ state: "visible" });
+    assert.match((await cancellationSlotDetails.innerText()).replace(/\s+/g, " "), /Slot 2.*12:00 PM.*4:00 PM/);
     let appointmentPatchCount = 0;
     const countAppointmentPatch = request => {
       if (request.method() === "PATCH" && new URL(request.url()).pathname === `/api/sessions/${assignedSessionId}`) {
@@ -317,9 +323,8 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     await page.getByRole("button", { name: "Keep Slot", exact: true }).click();
     assert.equal(await page.getByRole("dialog").count(), 0, "Keep Slot closes confirmation without changing the appointment");
     assert.equal(appointmentPatchCount, 0, "Keep Slot must not send a cancellation update");
-    await dashboardPatientRow().getByRole("button", { name: `Appointment actions for ${patient.name}` }).click();
-    await dashboardPatientRow().getByRole("menu").getByRole("menuitem", { name: "Cancel Dialysis Slot" }).click();
-    await page.getByRole("heading", { name: "Cancel Appointment" }).waitFor();
+    await page.getByRole("button", { name: "Cancel Slot", exact: true }).click();
+    await page.getByRole("heading", { name: "Cancel Slot", exact: true }).waitFor();
     const cancellationResponsePromise = page.waitForResponse(response =>
       new URL(response.url()).pathname === `/api/sessions/${assignedSessionId}` && response.request().method() === "PATCH");
     await page.getByRole("button", { name: "Confirm Cancellation", exact: true }).click();
@@ -330,6 +335,13 @@ async function runBrowserPatientHandoffTest(patient, machine, alternateMachine, 
     page.off("request", countAppointmentPatch);
     assert.equal(cancellationResult.session.id, assignedSessionId, "cancellation must retain the appointment record");
     assert.equal(cancellationResult.session.status, "cancelled", "cancellation must be persisted");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administrator Portal" }).click();
+    await page.getByLabel("Username").fill("admin1");
+    await page.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("heading", { name: "Today's Dialysis Patients" }).waitFor();
+    await page.locator('input[type="date"]').fill(assignmentDate);
     const cancelledDailyPatientRow = dashboardPatientRow();
     await cancelledDailyPatientRow.getByText("Unassigned", { exact: true }).waitFor();
     assert.equal(await cancelledDailyPatientRow.getByRole("button", { name: "Assign", exact: true }).isVisible(), true,
@@ -429,7 +441,9 @@ async function runBrowserSessionCancellationTest(machineName, machineCode) {
     await sessionCard.waitFor();
     assert.equal(await sessionCard.getByText("Scheduled", { exact: true }).isVisible(), true, "scheduled session should appear in Live Schedule");
     await sessionCard.click();
-    await page.getByRole("button", { name: "Cancel Session", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel Slot", exact: true }).click();
+    await page.getByRole("heading", { name: "Cancel Slot", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Confirm Cancellation", exact: true }).click();
     await sessionCard.getByText("Cancelled", { exact: true }).waitFor();
 
     await page.getByRole("button", { name: "Machines", exact: true }).click();
@@ -501,15 +515,19 @@ try {
   ids.machines.push(rescheduleMachine.machine.id);
   await runBrowserPatientHandoffTest(primary.patient, negativeMachine, rescheduleMachine.machine, second.patient.id, browserAssignmentDate);
   const browserSessions = await expectStatus(request("/api/sessions", { cookie: admin }), 200, "browser-created sessions should be readable");
+  const expectedBrowserRescheduleDate = new Date(`${browserAssignmentDate}T12:00:00`);
+  expectedBrowserRescheduleDate.setDate(expectedBrowserRescheduleDate.getDate() + 1);
+  const expectedBrowserRescheduleDateKey = `${expectedBrowserRescheduleDate.getFullYear()}-${String(expectedBrowserRescheduleDate.getMonth() + 1).padStart(2, "0")}-${String(expectedBrowserRescheduleDate.getDate()).padStart(2, "0")}`;
   const browserSession = browserSessions.sessions.find(item =>
     item.patientId === primary.patient.id && item.machineId === rescheduleMachine.machine.id &&
-    item.date === browserAssignmentDate && item.slot === "Slot 2"
+    item.slot === "Slot 2"
   );
-  assert.ok(browserSession, "browser assignment must persist a session");
-  assert.equal(browserSession.status, "cancelled", "the browser cancellation must retain the session row");
+  assert.ok(browserSession, "Live Schedule rescheduling must preserve the browser-created session");
+  assert.equal(browserSession.date, expectedBrowserRescheduleDateKey, "the rescheduled appointment must remain persisted on its new date");
+  assert.equal(browserSession.status, "cancelled", "the Live Schedule cancellation must retain the session row");
   ids.sessions.push(browserSession.id);
-  const machinesAfterDashboardCancellation = await expectStatus(request("/api/machines", { cookie: admin }), 200, "dashboard cancellation should release its destination machine");
-  assert.equal(machinesAfterDashboardCancellation.machines.find(item => item.id === rescheduleMachine.machine.id)?.status,
+  const machinesAfterLiveScheduleCancellation = await expectStatus(request("/api/machines", { cookie: admin }), 200, "Live Schedule cancellation should release its destination machine");
+  assert.equal(machinesAfterLiveScheduleCancellation.machines.find(item => item.id === rescheduleMachine.machine.id)?.status,
     "available", "cancelling a rescheduled appointment should release the destination machine");
   const outcomeMachine = await createMachine("OUTCOME", "Negative");
   const todayDate = new Date().toISOString().slice(0, 10);

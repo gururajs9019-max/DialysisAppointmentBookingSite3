@@ -33,7 +33,7 @@ export async function runPrescriptionDraftUiTest({ baseUrl, patient, blankPatien
       const section = () => page.getByRole("button", { name: role === "admin" ? "Treatment Status" : "Prescriptions", exact: true });
       const away = () => page.getByRole("button", { name: role === "admin" ? "Patient History" : "Home", exact: true });
       const search = () => page.getByPlaceholder("Search by patient name or UHID…");
-      const notes = () => page.locator("textarea");
+      const notes = () => page.getByLabel("Clinical Notes", { exact: true });
       const save = () => page.getByRole("button", { name: role === "admin" ? "Save Prescription" : "Save Changes", exact: true });
       const cancel = () => page.getByRole("button", { name: "Cancel", exact: true });
       const editing = () => page.getByText("Editing Prescription", { exact: true });

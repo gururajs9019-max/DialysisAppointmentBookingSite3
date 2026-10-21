@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FileText, Plus, Search, ChevronDown, ChevronUp, Edit2, Check, X, User, Pill, Clock, AlertTriangle, ScrollText, Trash2 } from "lucide-react";
 import type { AdminPrescription, Patient, RxDialysis, RxMedication, RxNotification } from "../../AdminApp";
-import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp } from "../../AdminApp";
 import { updatePrescription, PrescriptionConflictError, type DoctorPrescriptionCreatePayload, type PrescriptionMedicationDetails } from "../../lib/staffApi";
+import { WEEKLY_SESSION_OPTIONS, DIALYSIS_DAY_OPTIONS, SLOT_OPTIONS, DURATION_OPTIONS, formatRxTimestamp } from "../../lib/prescription-utils";
 import { PrescriptionConflict } from "../PrescriptionConflict";
 import { usePrescriptionDraftGuard, type PrescriptionDraftStateListener } from "../../lib/usePrescriptionLeaveGuard";
 import { DoctorPrescriptionCreateForm } from "./DoctorPrescriptionCreateForm";
+import { DialysisPrescriptionCreateForm } from "./DialysisPrescriptionCreateForm";
 
 interface DoctorPrescriptionProps {
   onNavigate: (view: string) => void;
@@ -17,6 +18,7 @@ interface DoctorPrescriptionProps {
   onDraftStateChange: PrescriptionDraftStateListener;
   targetPatientId?: string | null;
   targetPrescriptionId?: string | null;
+  isAdmin?: boolean;
 }
 
 const RX_SCALAR_FIELDS: { key: keyof Omit<RxDialysis, "dialysisDays">; label: string }[] = [
@@ -41,6 +43,15 @@ function StatusBadge({ status }: { status: AdminPrescription["status"] }) {
 
 type PrescriptionDetails = AdminPrescription & Partial<Omit<DoctorPrescriptionCreatePayload, "patientId" | "medications">>;
 
+function prescriptionKinds(prescription: AdminPrescription) {
+  const details = prescription as PrescriptionDetails;
+  const hasMedical = details.medicationOrders === true || prescription.medications?.length > 0;
+  const hasDialysis = Object.values(prescription.dialysisRx ?? {}).some(value =>
+    Array.isArray(value) ? value.length > 0 : Boolean(value),
+  );
+  return { medical: hasMedical, dialysis: hasDialysis || !hasMedical };
+}
+
 export function DoctorPrescription({
   onNavigate: _onNavigate,
   patients,
@@ -49,10 +60,15 @@ export function DoctorPrescription({
   onDraftStateChange,
   targetPatientId,
   targetPrescriptionId,
+  isAdmin = false,
 }: DoctorPrescriptionProps) {
   const [search, setSearch] = useState(() => prescriptions.find(rx => rx.id === targetPrescriptionId)?.patientUhid ?? "");
+  const [typeFilter, setTypeFilter] = useState<"All" | "Medical" | "Dialysis">("All");
+  const [doctorFilter, setDoctorFilter] = useState("All");
+  const [dateFilter, setDateFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(targetPrescriptionId ?? prescriptions[0]?.id ?? null);
   const [showNew, setShowNew] = useState(false);
+  const [newPrescriptionKind, setNewPrescriptionKind] = useState<"medical" | "dialysis" | null>(null);
   const [creationSuccess, setCreationSuccess] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<AdminPrescription | null>(null);
@@ -78,16 +94,25 @@ export function DoctorPrescription({
     setExpanded(targetPrescriptionId);
   }, [targetPatientId, targetPrescriptionId, patients, prescriptions]);
 
-  const filtered = prescriptions.filter(rx =>
-    rx.patientName.toLowerCase().includes(search.toLowerCase()) ||
-    rx.patientUhid.toLowerCase().includes(search.toLowerCase()) ||
-    rx.patientId.toLowerCase().includes(search.toLowerCase())
-  ).sort((a, b) => (b.createdAt || b.issuedDate).localeCompare(a.createdAt || a.issuedDate));
+  const doctorOptions = Array.from(new Set(prescriptions.map(rx => rx.createdBy || rx.updatedBy).filter(Boolean))).sort();
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filtered = prescriptions.filter(rx => {
+    const details = rx as PrescriptionDetails;
+    const kinds = prescriptionKinds(rx);
+    const doctorName = rx.createdBy || rx.updatedBy;
+    const date = (details.prescriptionDate || rx.createdAt || rx.issuedDate || "").slice(0, 10);
+    const matchesType = typeFilter === "All" || (typeFilter === "Medical" ? kinds.medical : kinds.dialysis);
+    return (!normalizedSearch || [rx.patientName, rx.patientUhid, rx.patientId, rx.id]
+      .some(value => value.toLocaleLowerCase().includes(normalizedSearch)))
+      && matchesType
+      && (doctorFilter === "All" || doctorName === doctorFilter)
+      && (!dateFilter || date === dateFilter);
+  }).sort((a, b) => (b.createdAt || b.issuedDate).localeCompare(a.createdAt || a.issuedDate));
 
   function startCreate() {
     if (!draftGuard.confirmDiscard()) return;
     setEditingId(null); setEditDraft(null); setConflict(false); setSaveError(null);
-    setCreationSuccess(false); setShowNew(true);
+    setCreationSuccess(false); setNewPrescriptionKind(null); setShowNew(true);
   }
 
   function startEdit(rx: AdminPrescription) {
@@ -137,7 +162,9 @@ export function DoctorPrescription({
 
   function addMedRow() {
     if (!editDraft) return;
-    setEditDraft({ ...editDraft, medications: [...editDraft.medications, { name: "", dose: "", frequency: "", route: "PO" }] });
+    setEditDraft({ ...editDraft, medications: [...editDraft.medications, {
+      name: "", strength: "", dose: "", frequency: "", route: "PO", duration: "", quantity: "", instructions: "",
+    }] });
   }
 
   function removeMedRow(idx: number) {
@@ -155,8 +182,10 @@ export function DoctorPrescription({
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-600 to-blue-800 rounded-xl shadow-lg p-6 text-white">
-        <h1 className="text-2xl md:text-3xl font-bold mb-1">Prescriptions</h1>
-        <p className="text-blue-100 text-sm">Manage dialysis prescriptions and medication orders for your patients</p>
+        <h1 className="text-2xl md:text-3xl font-bold mb-1">{isAdmin ? "Prescription Management" : "Prescriptions"}</h1>
+        <p className="text-blue-100 text-sm">{isAdmin
+          ? "Search, review, create, and revise patient medical and dialysis prescriptions."
+          : "Manage dialysis prescriptions and medication orders for your patients."}</p>
       </div>
 
       {/* Actions */}
@@ -179,21 +208,71 @@ export function DoctorPrescription({
           <Plus className="w-4 h-4" /> Create Prescription
         </button>
       </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="text-xs font-semibold text-slate-600">Prescription type
+          <select value={typeFilter} onChange={event => setTypeFilter(event.target.value as typeof typeFilter)}
+            className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700">
+            <option>All</option><option>Medical</option><option>Dialysis</option>
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-slate-600">Prescribing staff
+          <select value={doctorFilter} onChange={event => setDoctorFilter(event.target.value)}
+            className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700">
+            <option value="All">All staff</option>
+            {doctorOptions.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-slate-600">Prescription date
+          <input type="date" value={dateFilter} onChange={event => setDateFilter(event.target.value)}
+            className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700" />
+        </label>
+      </div>
 
       {creationSuccess && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
         Prescription created successfully.
       </p>}
 
-      {showNew && (
-        <DoctorPrescriptionCreateForm patients={patients} prescriptions={prescriptions}
+      {showNew && !newPrescriptionKind && (
+        <section aria-label="Choose prescription type" className="grid gap-4 sm:grid-cols-2">
+          <button type="button" onClick={() => setNewPrescriptionKind("medical")}
+            className="rounded-2xl border border-blue-200 bg-white p-5 text-left shadow-sm transition hover:border-blue-400 hover:bg-blue-50">
+            <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Pill className="h-5 w-5" /></span>
+            <span className="block font-bold text-slate-800">Medical prescription</span>
+            <span className="mt-1 block text-sm text-slate-500">Record diagnosis, clinical notes, and medicine orders.</span>
+          </button>
+          <button type="button" onClick={() => setNewPrescriptionKind("dialysis")}
+            className="rounded-2xl border border-violet-200 bg-white p-5 text-left shadow-sm transition hover:border-violet-400 hover:bg-violet-50">
+            <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700"><FileText className="h-5 w-5" /></span>
+            <span className="block font-bold text-slate-800">Dialysis prescription</span>
+            <span className="mt-1 block text-sm text-slate-500">Record prescribed frequency, days, slot, and treatment parameters.</span>
+          </button>
+          <button type="button" onClick={() => setShowNew(false)} className="text-left text-sm font-semibold text-slate-500 hover:text-slate-800 sm:col-span-2">Cancel</button>
+        </section>
+      )}
+
+      {showNew && newPrescriptionKind === "medical" && (
+        <DoctorPrescriptionCreateForm patients={patients} prescriptions={prescriptions} audience={isAdmin ? "administrator" : "doctor"}
           onDraftStateChange={onDraftStateChange}
-          onCancel={() => setShowNew(false)}
+          onCancel={() => { setShowNew(false); setNewPrescriptionKind(null); }}
           onCreated={saved => {
             setPrescriptions(previous => [saved, ...previous.filter(prescription => prescription.id !== saved.id)]);
-            setExpanded(saved.id); setSearch(""); setShowNew(false); setCreationSuccess(true);
+            setExpanded(saved.id); setSearch(""); setShowNew(false); setNewPrescriptionKind(null); setCreationSuccess(true);
           }}
           onViewExisting={prescription => {
-            setShowNew(false); setSearch(prescription.patientUhid); setExpanded(prescription.id);
+            setShowNew(false); setNewPrescriptionKind(null); setSearch(prescription.patientUhid); setExpanded(prescription.id);
+          }} />
+      )}
+
+      {showNew && newPrescriptionKind === "dialysis" && (
+        <DialysisPrescriptionCreateForm patients={patients} prescriptions={prescriptions} audience={isAdmin ? "administrator" : "doctor"}
+          onDraftStateChange={onDraftStateChange}
+          onCancel={() => { setShowNew(false); setNewPrescriptionKind(null); }}
+          onCreated={saved => {
+            setPrescriptions(previous => [saved, ...previous.filter(prescription => prescription.id !== saved.id)]);
+            setExpanded(saved.id); setSearch(""); setShowNew(false); setNewPrescriptionKind(null); setCreationSuccess(true);
+          }}
+          onViewExisting={prescription => {
+            setShowNew(false); setNewPrescriptionKind(null); setSearch(prescription.patientUhid); setExpanded(prescription.id);
           }} />
       )}
 
@@ -221,6 +300,12 @@ export function DoctorPrescription({
                     <div>
                       <div className="flex items-center gap-2 flex-wrap mb-0.5">
                         <p className="font-bold text-slate-800">{rx.patientName}</p>
+                         <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                           {(() => {
+                             const kinds = prescriptionKinds(rx);
+                             return kinds.medical && kinds.dialysis ? "Medical + Dialysis" : kinds.medical ? "Medical" : "Dialysis";
+                           })()}
+                         </span>
                         <StatusBadge status={rx.status} />
                         {rx.history.length > 0 && (
                           <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold border border-slate-200">v{rx.history.length + 1}</span>
@@ -266,6 +351,49 @@ export function DoctorPrescription({
                       {conflict && <PrescriptionConflict key={draft.id} draft={draft} onResolve={reviewed => {
                         setEditDraft(reviewed); setConflict(false); setSaveError(null);
                       }} />}
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Prescription date
+                          <input type="date" value={draft.prescriptionDate ?? ""}
+                            onChange={event => setEditDraft({ ...draft, prescriptionDate: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Diagnosis
+                          <input value={draft.diagnosis} onChange={event => setEditDraft({ ...draft, diagnosis: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Symptoms / clinical notes
+                          <textarea rows={2} value={draft.symptoms ?? ""}
+                            onChange={event => setEditDraft({ ...draft, symptoms: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Investigation findings
+                          <textarea rows={2} value={draft.investigationFindings ?? ""}
+                            onChange={event => setEditDraft({ ...draft, investigationFindings: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Doctor's advice
+                          <textarea rows={2} value={draft.advice ?? ""}
+                            onChange={event => setEditDraft({ ...draft, advice: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Dietary advice
+                          <textarea rows={2} value={draft.dietaryAdvice ?? ""}
+                            onChange={event => setEditDraft({ ...draft, dietaryAdvice: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Follow-up date
+                          <input type="date" value={draft.followUpDate ?? ""}
+                            onChange={event => setEditDraft({ ...draft, followUpDate: event.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700" />
+                        </label>
+                      </div>
                       {/* Dialysis Rx */}
                       <div>
                         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
@@ -335,9 +463,13 @@ export function DoctorPrescription({
                           <table className="w-full text-xs">
                             <thead><tr className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider">
                               <th className="text-left px-2 py-2 rounded-l-lg">Medication</th>
+                              <th className="text-left px-2 py-2">Strength</th>
                               <th className="text-left px-2 py-2">Dose</th>
-                              <th className="text-left px-2 py-2">Frequency</th>
                               <th className="text-left px-2 py-2">Route</th>
+                              <th className="text-left px-2 py-2">Frequency</th>
+                              <th className="text-left px-2 py-2">Duration</th>
+                              <th className="text-left px-2 py-2">Quantity</th>
+                              <th className="text-left px-2 py-2">Instructions</th>
                               <th className="px-2 py-2 rounded-r-lg"></th>
                             </tr></thead>
                             <tbody>
@@ -348,7 +480,15 @@ export function DoctorPrescription({
                                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
                                   </td>
                                   <td className="px-1 py-1">
+                                    <input value={med.strength ?? ""} onChange={e => updateMed(i, "strength", e.target.value)} placeholder="Strength"
+                                      className="w-full min-w-24 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                                  </td>
+                                  <td className="px-1 py-1">
                                     <input value={med.dose} onChange={e => updateMed(i, "dose", e.target.value)} placeholder="Dose"
+                                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                                  </td>
+                                  <td className="px-1 py-1">
+                                    <input value={med.route} onChange={e => updateMed(i, "route", e.target.value)} placeholder="Route"
                                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
                                   </td>
                                   <td className="px-1 py-1">
@@ -356,7 +496,15 @@ export function DoctorPrescription({
                                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
                                   </td>
                                   <td className="px-1 py-1">
-                                    <input value={med.route} onChange={e => updateMed(i, "route", e.target.value)} placeholder="Route"
+                                    <input value={med.duration ?? ""} onChange={e => updateMed(i, "duration", e.target.value)} placeholder="Duration"
+                                      className="w-full min-w-24 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                                  </td>
+                                  <td className="px-1 py-1">
+                                    <input value={med.quantity ?? ""} onChange={e => updateMed(i, "quantity", e.target.value)} placeholder="Quantity"
+                                      className="w-full min-w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                                  </td>
+                                  <td className="px-1 py-1">
+                                    <input value={med.instructions ?? ""} onChange={e => updateMed(i, "instructions", e.target.value)} placeholder="Instructions"
                                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white" />
                                   </td>
                                   <td className="px-1 py-1">
@@ -378,6 +526,7 @@ export function DoctorPrescription({
                         </label>
                         <textarea
                           rows={3}
+                          aria-label="Clinical Notes"
                           value={draft.notes}
                           onChange={e => setEditDraft({ ...draft, notes: e.target.value })}
                           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"

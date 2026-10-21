@@ -36,6 +36,7 @@ export async function runPrescriptionConflictUiTest({ baseUrl, patient, prescrip
     }
     const saveButton = role => pages[role].getByRole("button", { name: role === "admin" ? "Save Prescription" : "Save Changes", exact: true });
     const conflict = role => pages[role].getByRole("region", { name: "Prescription conflict" });
+    const clinicalNotes = role => pages[role].getByLabel("Clinical Notes", { exact: true });
     const readCurrent = () => pages.admin.evaluate(async id => {
       const data = await (await fetch("/api/prescriptions")).json();
       return data.prescriptions.find(rx => rx.id === id);
@@ -48,13 +49,13 @@ export async function runPrescriptionConflictUiTest({ baseUrl, patient, prescrip
       await edit("admin"); await edit("doctor");
       const winningNote = `${patient.uhid} ${winner} saved`;
       const draftNote = `${patient.uhid} ${loser} unsaved`;
-      await pages[winner].locator("textarea").fill(winningNote);
-      await pages[loser].locator("textarea").fill(draftNote);
+      await clinicalNotes(winner).fill(winningNote);
+      await clinicalNotes(loser).fill(draftNote);
       await saveButton(winner).click();
       await expect(pages[winner].getByText("Editing Prescription", { exact: true })).toHaveCount(0);
       await saveButton(loser).click();
       await expect(conflict(loser)).toBeVisible();
-      await expect(pages[loser].locator("textarea")).toHaveValue(draftNote);
+      await expect(clinicalNotes(loser)).toHaveValue(draftNote);
       await expect(saveButton(loser)).toBeDisabled();
       assert.equal((await readCurrent()).notes, winningNote, "conflict must not overwrite winner");
       assert.equal((await readCurrent()).version, before.version + 1);
@@ -66,7 +67,7 @@ export async function runPrescriptionConflictUiTest({ baseUrl, patient, prescrip
         }), { times: 1 });
         await conflict(loser).getByRole("button", { name: "Compare newer version" }).click();
         await expect(conflict(loser).getByText(/Comparison temporarily unavailable/)).toBeVisible();
-        await expect(pages[loser].locator("textarea")).toHaveValue(draftNote);
+        await expect(clinicalNotes(loser)).toHaveValue(draftNote);
       }
       await conflict(loser).getByRole("button", { name: "Compare newer version" }).click();
       await expect(conflict(loser).getByText(draftNote, { exact: true })).toBeVisible();
@@ -80,8 +81,8 @@ export async function runPrescriptionConflictUiTest({ baseUrl, patient, prescrip
       }
       await conflict(loser).getByRole("button", { name: "Apply reviewed values to editor" }).click();
       await expect(conflict(loser)).toHaveCount(0);
-      await expect(pages[loser].locator("textarea")).toHaveValue(loser === "doctor" ? draftNote : winningNote);
-      if (loser === "admin") await pages[loser].locator("textarea").fill(draftNote);
+      await expect(clinicalNotes(loser)).toHaveValue(loser === "doctor" ? draftNote : winningNote);
+      if (loser === "admin") await clinicalNotes(loser).fill(draftNote);
       await saveButton(loser).click();
       await expect(pages[loser].getByText("Editing Prescription", { exact: true })).toHaveCount(0);
       const after = await readCurrent();

@@ -12,6 +12,7 @@ interface DoctorPrescriptionDetails extends AdminPrescription {
 interface DoctorPrescriptionCreateFormProps {
   patients: Patient[];
   prescriptions: AdminPrescription[];
+  audience?: "doctor" | "administrator";
   onCancel: () => void;
   onCreated: (prescription: AdminPrescription) => void;
   onViewExisting: (prescription: AdminPrescription) => void;
@@ -47,6 +48,7 @@ function displayDate(value: string) {
 export function DoctorPrescriptionCreateForm({
   patients,
   prescriptions,
+  audience = "doctor",
   onCancel,
   onCreated,
   onViewExisting,
@@ -165,7 +167,9 @@ export function DoctorPrescriptionCreateForm({
           <h2 id="create-prescription-title" className="flex items-center gap-2 text-lg font-bold">
             <FileText className="h-5 w-5" /> Create Prescription
           </h2>
-          <p className="mt-1 text-sm text-blue-100">Use an existing patient record. Clinical decisions and medicine orders must be entered by the doctor.</p>
+          <p className="mt-1 text-sm text-blue-100">{audience === "administrator"
+            ? "Create a prescription for an existing active patient using authorized clinical instructions."
+            : "Use an existing patient record. Clinical decisions and medicine orders must be entered by the doctor."}</p>
         </div>
         <button type="button" onClick={closeForm} disabled={saving} aria-label="Close prescription form"
           className="rounded-lg p-2 text-blue-100 hover:bg-white/10 hover:text-white disabled:opacity-50">

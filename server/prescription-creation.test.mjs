@@ -34,6 +34,7 @@ try {
     role: "doctor", identifier: "doctor1", password: process.env.STAFF_DOCTOR_PASSWORD,
   });
   const doctor = doctorLogin.cookie;
+  const adminId = (await db.query("SELECT id FROM portal_users WHERE username='admin1'")).rows[0].id;
   const doctorId = (await db.query("SELECT id FROM portal_users WHERE username='doctor1'")).rows[0].id;
   async function patient(suffix) {
     const created = (await expectRequest("/api/patients", admin, "POST", {
@@ -102,6 +103,7 @@ try {
   await page.goto(base);
   await signIn();
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
+  await page.getByText("Medical prescription", { exact: true }).click();
   const form = page.locator('section[aria-labelledby="create-prescription-title"]');
   const save = form.getByRole("button", { name: "Save Prescription", exact: true });
   await save.click();
@@ -179,6 +181,7 @@ try {
   }
   await expect(persistedSymptoms).toBeVisible();
   await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
+  await page.getByText("Medical prescription", { exact: true }).click();
   await selectUiPatient();
   await expect(form.getByRole("heading", { name: `Previous prescriptions for ${uiPatient.name}` })).toBeVisible();
   await expect(form).toContainText("Prescribed by");
@@ -193,8 +196,65 @@ try {
   uiRows = (await db.query("SELECT * FROM prescriptions WHERE patient_id=$1 ORDER BY created_at", [uiPatient.id])).rows;
   assert.equal(uiRows.length, 2, "a patient with history can receive a new separate prescription");
   assert.equal(uiRows[0].data.diagnosis, `${run} UI diagnosis`, "the original prescription is unchanged");
+  await page.getByRole("button", { name: "Create Prescription", exact: true }).click();
+  await page.getByText("Dialysis prescription", { exact: true }).click();
+  const dialysisForm = page.locator('section[aria-labelledby="create-dialysis-prescription-title"]');
+  await dialysisForm.getByLabel("Search active patients by name or patient ID").fill(uiPatient.uhid);
+  await dialysisForm.getByRole("button").filter({ has: page.getByText(uiPatient.name, { exact: true }) }).click();
+  await dialysisForm.getByLabel("Sessions per week").selectOption("3 Sessions / Week");
+  await dialysisForm.getByLabel("Time slot").selectOption("8:00 AM – 12:00 PM");
+  await dialysisForm.getByLabel("Session duration").selectOption("4 Hours");
+  await dialysisForm.getByRole("button", { name: "Monday", exact: true }).click();
+  await dialysisForm.getByRole("button", { name: "Wednesday", exact: true }).click();
+  await dialysisForm.getByLabel("Blood flow rate").fill("300 mL/min");
+  await dialysisForm.getByLabel("Additional instructions").fill("Synthetic dialysis instructions");
+  await dialysisForm.getByRole("button", { name: "Create Dialysis Prescription", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Prescription created successfully.");
+  uiRows = (await db.query("SELECT * FROM prescriptions WHERE patient_id=$1 ORDER BY created_at", [uiPatient.id])).rows;
+  assert.equal(uiRows.length, 3, "dialysis prescriptions are saved as separate patient records");
+  const dialysisRecord = uiRows.find(row => row.data.medicationOrders === false);
+  assert.ok(dialysisRecord, "dialysis prescription is distinct from medical medicine orders");
+  assert.deepEqual(dialysisRecord.data.dialysisRx.dialysisDays, ["Monday", "Wednesday"]);
+  assert.equal(dialysisRecord.data.dialysisRx.bloodFlow, "300 mL/min");
+  assert.equal(dialysisRecord.data.notes, "Synthetic dialysis instructions");
+  assert.deepEqual(dialysisRecord.data.medications, []);
+
+  const adminPage = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  const adminErrors = [];
+  adminPage.on("pageerror", error => adminErrors.push(error.message));
+  await adminPage.goto(base);
+  await adminPage.getByRole("button", { name: "Administrator Portal" }).click();
+  await adminPage.getByLabel("Username").fill("admin1");
+  await adminPage.getByLabel("Password").fill(process.env.STAFF_ADMIN_PASSWORD);
+  await adminPage.getByRole("button", { name: "Sign In", exact: true }).click();
+  await adminPage.getByRole("button", { name: "Prescriptions", exact: true }).click();
+  await expect(adminPage.getByRole("heading", { name: "Prescription Management", exact: true })).toBeVisible();
+  await adminPage.getByPlaceholder("Search by patient name or UHID…").fill(uiPatient.uhid);
+  await adminPage.getByLabel("Prescription type").selectOption("Medical");
+  await adminPage.getByLabel("Prescribing staff").selectOption((await db.query(
+    "SELECT name FROM portal_users WHERE id=$1", [doctorId],
+  )).rows[0].name);
+  await adminPage.getByLabel("Prescription date").fill(uiRows.find(row => row.data.medicationOrders).data.prescriptionDate);
+  const adminMedicalCard = adminPage.getByRole("button").filter({ hasText: uiPatient.uhid }).filter({ hasText: `${run} UI diagnosis` }).first();
+  await adminMedicalCard.click();
+  await expect(adminPage.getByText("Synthetic UI medicine A", { exact: false })).toBeVisible();
+  await adminPage.getByRole("button", { name: "Create Prescription", exact: true }).click();
+  await adminPage.getByText("Medical prescription", { exact: true }).click();
+  const adminForm = adminPage.locator('section[aria-labelledby="create-prescription-title"]');
+  await adminForm.getByLabel("Search registered patients by name or patient ID").fill(uiPatient.uhid);
+  await adminForm.getByRole("button").filter({ has: adminPage.getByText(uiPatient.name, { exact: true }) }).click();
+  await adminForm.getByLabel("Diagnosis", { exact: false }).fill(`${run} Administrator prescription`);
+  await adminForm.locator("#medicine-0-name").fill("Administrator synthetic medication");
+  await adminForm.getByRole("button", { name: "Save Prescription", exact: true }).click();
+  await expect(adminPage.getByRole("status")).toContainText("Prescription created successfully.");
+  const adminCreated = (await db.query(
+    "SELECT * FROM prescriptions WHERE patient_id=$1 AND data->>'diagnosis'=$2", [uiPatient.id, `${run} Administrator prescription`],
+  )).rows[0];
+  assert.ok(adminCreated, "administrator prescription page creates a real record");
+  assert.equal(adminCreated.created_by, adminId, "administrator identity is recorded as the creator");
+  assert.deepEqual(adminErrors, [], "administrator prescription management has no browser runtime errors");
   assert.deepEqual(errors, [], "prescription creation has no browser runtime errors");
-  console.log("prescription creation tests passed: new/existing patients, full medicine details, history, authorization, validation, idempotent retries, error preservation, refresh, and tablet UI");
+  console.log("prescription creation tests passed: medical and dialysis records, new/existing patients, separate history, authorization, validation, idempotent retries, error preservation, refresh, and tablet UI");
 } finally {
   if (browser) await browser.close();
   const prescriptionIds = patientIds.length
