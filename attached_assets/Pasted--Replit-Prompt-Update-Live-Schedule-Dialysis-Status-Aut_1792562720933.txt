@@ -1,0 +1,302 @@
+# Replit Prompt — Update Live Schedule, Dialysis Status Automation, and Prescription Management
+
+I am developing an existing Dialysis Slot Manager application with three portals: Administrator, Doctor, and Patient.
+
+Inspect the existing project, its database schema, authentication, scheduling logic, and UI components before making changes. Implement the following updates directly in the existing application.
+
+**Important:** Do not rebuild the application from scratch. Preserve the existing design system, patient data, authentication, permissions, machine assignments, dialysis units, and all unrelated functionality.
+
+## 1. Remove the Three-Dot Menu and Edit/Cancel Options from Today's Dialysis
+
+In the Administrator Portal, open the **Today's Dialysis** section.
+
+Currently, each patient card has a three-dot menu with options to edit or cancel the dialysis slot.
+
+Make these changes:
+
+- Remove the three-dot menu icon from every patient card in Today's Dialysis.
+- Remove the Edit Dialysis Slot and Cancel Dialysis Slot actions from this section.
+- Do not open the edit/cancel interface when clicking a patient card or patient name.
+- Keep the existing patient information, slot time, machine, unit, and dialysis status visible.
+- Preserve the current card design and layout.
+
+**Important:** Do not remove the cancellation functionality from the Live Schedule page. All slot management actions should now be available through Live Schedule.
+
+## 2. Add a Reschedule Option to Live Schedule
+
+In the Administrator Portal, open the existing **Live Schedule** page.
+
+The page already contains a Cancel Slot option, but there is no Reschedule Slot option. Add it.
+
+### UI changes
+
+Add a **Reschedule Slot** action for each scheduled dialysis session, alongside the existing Cancel Slot action.
+
+Use the existing row actions, dropdown menu, or action buttons. Follow the current UI design.
+
+### Reschedule workflow
+
+When the administrator clicks Reschedule Slot:
+
+1. Open a modal or form for the selected dialysis session.
+2. Display the patient's name and current appointment details.
+3. Allow the administrator to select a new date, time slot, unit, and machine, wherever applicable.
+4. Use the existing available time slots:
+   - 8:00 AM–12:00 PM
+   - 12:00 PM–4:00 PM
+   - 4:00 PM–8:00 PM
+5. Allow selection between Unit 1 and Unit 2.
+6. Display the machines belonging to the selected unit, using the existing machine inventory and machine categories.
+7. Prevent assignment to a machine that is disabled, under maintenance, or otherwise unavailable.
+8. Prevent conflicting assignments when a machine is already occupied for the selected time slot.
+9. Validate the new assignment before saving.
+10. Save the changes to the existing dialysis session rather than creating a duplicate appointment.
+11. Refresh Live Schedule and Today's Dialysis after successful rescheduling.
+12. Show a success or error message as appropriate.
+
+Preserve all existing machine-category restrictions and other scheduling rules.
+
+### Cancellation
+
+Keep the existing Cancel Slot functionality in Live Schedule.
+
+Before cancellation, display a confirmation dialog showing the patient and appointment details.
+
+Cancelling a slot must not delete the patient, their medical records, or their dialysis history.
+
+## 3. Automatically Update Dialysis Status Based on Scheduled Time
+
+Currently, dialysis sessions may remain in the Waiting status even when their scheduled time has arrived.
+
+Implement automatic status updates based on the actual current time.
+
+### Required statuses
+
+Use the application's existing status system where possible. The relevant statuses should behave as follows:
+
+- **Waiting:** The dialysis session is scheduled but has not reached its start time.
+- **Running:** The scheduled start time has arrived, and the session is eligible to begin.
+- **Completed:** The dialysis session has been marked as completed by an authorized user.
+- **Cancelled:** The appointment has been cancelled.
+- **Missed:** The appointment was missed according to the application's existing workflow or an authorized user's action.
+
+Do not automatically mark a session Completed or Missed solely because time has passed.
+
+### Automatic transition from Waiting to Running
+
+When the current date and time reaches the scheduled start time of a dialysis session, automatically update its status from Waiting to Running, provided that:
+
+- The session is scheduled for the current date.
+- The session has not been cancelled, completed, or marked as missed.
+- The session has not already started.
+- The session is still eligible to run under the existing scheduling rules.
+
+For example:
+
+If a patient's slot is scheduled for 8:00 AM–12:00 PM, the status should automatically change from Waiting to Running at 8:00 AM local time, if the session is eligible to start.
+
+Apply the same rule to the 12:00 PM and 4:00 PM slots.
+
+### Technical requirements
+
+- Use the correct hospital/local timezone configured by the application. Do not rely on an inconsistent mix of browser time, UTC, and server time.
+- Implement status updates using a reliable backend mechanism, such as a scheduled task, background job, or server-side status evaluation.
+- If the application does not support background jobs, implement the safest compatible alternative and ensure the status is refreshed when the relevant pages load or update.
+- Do not rely exclusively on a frontend timer, because it may stop when the browser is closed.
+- Make the update idempotent so the same session is not repeatedly transitioned or processed.
+- Refresh the status in Today's Dialysis and Live Schedule without requiring the administrator to manually change it.
+- Ensure cancelled or completed sessions never revert to Running.
+- Handle rescheduled appointments using their updated date and start time.
+- Do not automatically start a dialysis machine or operate physical medical equipment. This is a scheduling-status update only.
+
+### Important clarification
+
+A scheduled start time does not necessarily confirm that the patient has physically started dialysis. If the existing system tracks actual treatment initiation, preserve that distinction and use the appropriate status semantics. Do not fabricate clinical treatment events.
+
+## 4. Create a New Prescription Page
+
+There is currently no visible page for creating or editing medical prescriptions or dialysis prescriptions.
+
+Create a new page called **Prescription** in the appropriate portal navigation, using the existing application's authorization model.
+
+The primary management interface should be available to authorized administrators and doctors, according to their existing permissions. Patients must not be able to create or edit prescriptions.
+
+Do not create duplicate pages if a prescription component or backend model already exists. Inspect and reuse existing functionality where possible.
+
+### Navigation
+
+Add a Prescription navigation item in the appropriate Administrator Portal and Doctor Portal navigation.
+
+- Administrator: Access prescription management according to existing permissions.
+- Doctor: Create and edit prescriptions for authorized patients.
+- Patient: May view their own prescriptions only if the existing application supports patient prescription viewing. Do not expose editing controls to patients.
+
+Keep the existing portal navigation and layout unchanged apart from adding the required item.
+
+## 5. Prescription Management Dashboard
+
+Create a Prescription page with the following features.
+
+### Prescription list
+
+Display existing prescriptions using real database data.
+
+Include relevant information:
+
+- Prescription ID
+- Patient name and patient ID
+- Prescription type: Medical or Dialysis
+- Prescribing doctor
+- Date created
+- Last updated date
+- Status, if supported
+- Actions
+
+Provide:
+
+- Search by patient name or ID.
+- Filter by prescription type.
+- Filter by prescribing doctor, where permitted.
+- Filter by date.
+- View prescription.
+- Edit prescription, if authorized.
+
+Display an appropriate empty state when no prescriptions exist.
+
+Do not use hardcoded sample records.
+
+## 6. Create and Edit Medical Prescriptions
+
+Add a **Create Prescription** button.
+
+When clicked, allow an authorized doctor to select a registered patient and enter the medical prescription details.
+
+Suggested fields:
+
+- Patient
+- Prescription date
+- Prescribing doctor
+- Diagnosis or clinical notes
+- Medication name
+- Dosage
+- Route of administration
+- Frequency
+- Duration
+- Instructions
+- Relevant allergies or precautions, if supported by the existing patient record
+- Follow-up instructions
+- Additional notes
+
+Allow multiple medications in one prescription.
+
+Provide buttons to:
+
+- Add Medication
+- Remove Medication
+- Save Draft, if supported
+- Save Prescription
+- Cancel
+
+Allow authorized doctors to edit existing prescriptions while preserving the appropriate audit history.
+
+Do not invent medication recommendations or automatically prescribe drugs. The doctor must enter and approve the clinical details.
+
+## 7. Create and Edit Dialysis Prescriptions
+
+The Prescription page must also support a separate **Dialysis Prescription** type.
+
+When the administrator or authorized doctor selects Dialysis Prescription, display relevant fields such as:
+
+- Patient
+- Prescription date
+- Prescribing doctor
+- Dialysis frequency
+- Duration of dialysis session
+- Dialyzer details, if supported
+- Blood flow rate
+- Dialysate flow rate
+- Dialysate composition
+- Ultrafiltration target
+- Anticoagulation instructions
+- Dialysis access type
+- Additional clinical instructions
+
+Use suitable units and field validation where applicable.
+
+These are data-entry fields only. Do not automatically generate clinical values, recommend settings, or change machine operating parameters.
+
+The prescribing doctor is responsible for entering and approving the dialysis prescription.
+
+Allow authorized users to view existing dialysis prescriptions and edit them according to their permissions.
+
+**Important:** Do not confuse a dialysis prescription with a scheduled appointment. Editing a prescription must not automatically change the patient's appointment, assigned machine, unit, or time slot unless an explicit existing workflow requires it.
+
+## 8. Patient Selection and Data Integrity
+
+When creating a prescription:
+
+- Select an existing registered patient.
+- Retrieve the patient's actual details from the database.
+- Link the prescription to the correct patient ID.
+- Link it to the authenticated prescribing doctor where applicable.
+- Prevent prescriptions from being attached to the wrong patient.
+- Do not create duplicate patient records.
+- Validate required fields before saving.
+- Display clear success and error messages.
+
+Prescriptions must persist in the database and remain available after refreshing or signing out and back in.
+
+Do not store prescriptions only in frontend state or browser local storage.
+
+## 9. Security and Audit History
+
+Prescriptions contain sensitive medical information.
+
+Implement appropriate authorization at the backend/database level.
+
+- Administrators can manage prescriptions only as permitted by the application's role policy.
+- Doctors can create and edit prescriptions only within their authorized scope.
+- Patients cannot modify prescriptions.
+- Users must not be able to access another patient's prescription by changing a URL or ID.
+- Preserve the identity of the prescribing doctor.
+- Track creation and modification timestamps.
+- Preserve previous versions or an audit trail where supported.
+- Do not silently overwrite clinically significant prescription changes without appropriate authorization and traceability.
+
+Reuse the application's existing authentication, roles, and database security policies.
+
+## 10. Design Requirements
+
+- Follow the existing Dialysis Slot Manager design system.
+- Use the existing cards, forms, tables, buttons, icons, colors, and typography.
+- Make the Prescription page responsive.
+- Keep Medical Prescription and Dialysis Prescription clearly separated using tabs or a prescription-type selector.
+- Use readable forms with clear section headings.
+- Ensure the layout works on desktop and tablet.
+- Do not redesign unrelated pages.
+
+## 11. Strict Scope and Regression Testing
+
+Before implementation, inspect the existing project and identify the relevant components, routes, database models, API functions, and status values.
+
+Reuse existing functionality instead of duplicating it.
+
+After implementing, test all of the following:
+
+1. Three-dot menus are removed from Today's Dialysis patient cards.
+2. Edit and Cancel actions are no longer available from those cards.
+3. Cancel Slot continues to work in Live Schedule.
+4. Reschedule Slot is available in Live Schedule.
+5. Rescheduling updates the existing appointment without creating a duplicate.
+6. Machine conflicts and unavailable machines are handled correctly.
+7. Waiting sessions transition to Running at their scheduled start time when eligible.
+8. Cancelled, completed, and missed sessions do not incorrectly transition to Running.
+9. Status updates use the configured local timezone.
+10. The Prescription page appears in the correct portal navigation.
+11. Authorized doctors can create and edit medical prescriptions.
+12. Authorized users can create and edit dialysis prescriptions.
+13. Prescription data persists in the database.
+14. Users cannot access prescriptions outside their permissions.
+15. Patient registration, machine management, unit management, and existing portal features continue to work.
+
+**Implement these changes in the existing project, verify the relevant workflows, and report which components, backend functions, database changes, and tests were actually completed. Do not claim a feature is complete unless it has been implemented and tested.**
